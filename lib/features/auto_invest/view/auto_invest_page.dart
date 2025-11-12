@@ -1,4 +1,6 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../featured_coins/controller/featured_coin_notifier.dart';
@@ -27,7 +29,8 @@ class AutoInvestPage extends ConsumerWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'Configura los criterios del bot y prepara la conexión con tu wallet de Phantom.\n'
+              'Configura los criterios del bot y vincula tu wallet '
+              '(Phantom en web o keypair local en desktop).\n'
               'Cuando Auto Invest esté activo, las reglas se usarán para futuras compras/ventas automatizadas.',
               style: theme.textTheme.bodyMedium,
             ),
@@ -39,6 +42,8 @@ class AutoInvestPage extends ConsumerWidget {
             _FilterCard(state: state, notifier: notifier),
             const SizedBox(height: 16),
             _SafetyCard(state: state, notifier: notifier),
+            const SizedBox(height: 16),
+            _ExecutionModeCard(state: state, notifier: notifier),
             const SizedBox(height: 16),
             SwitchListTile.adaptive(
               value: state.isEnabled,
@@ -85,6 +90,9 @@ class _WalletCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final connected = state.walletAddress != null;
+    final instructions = kIsWeb
+        ? 'Conecta Phantom (Chrome/Edge) y autoriza a la app.'
+        : 'Define --dart-define=LOCAL_KEY_PATH=/ruta/auto_bot.json y presiona Conectar.';
 
     return Card(
       child: Padding(
@@ -92,7 +100,7 @@ class _WalletCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Wallet Phantom', style: theme.textTheme.titleMedium),
+            Text('Wallet', style: theme.textTheme.titleMedium),
             const SizedBox(height: 12),
             if (connected)
               Row(
@@ -114,8 +122,7 @@ class _WalletCard extends StatelessWidget {
               )
             else
               Text(
-                'Conecta Phantom en el navegador (Chrome/Edge) y autoriza a la app.\n'
-                'El soporte es solo para Flutter Web.',
+                instructions,
                 style: theme.textTheme.bodySmall,
               ),
             const SizedBox(height: 12),
@@ -126,7 +133,7 @@ class _WalletCard extends StatelessWidget {
                       ? notifier.disconnectWallet
                       : notifier.connectWallet,
               icon: Icon(connected ? Icons.link_off : Icons.link),
-              label: Text(connected ? 'Disconnect' : 'Connect Phantom'),
+              label: Text(connected ? 'Disconnect' : 'Connect wallet'),
             ),
           ],
         ),
@@ -313,6 +320,105 @@ class _SafetyCard extends StatelessWidget {
   }
 }
 
+class _ExecutionModeCard extends StatelessWidget {
+  const _ExecutionModeCard({
+    required this.state,
+    required this.notifier,
+  });
+
+  final AutoInvestState state;
+  final AutoInvestNotifier notifier;
+
+  static const _poolOptions = [
+    'pump',
+    'pump-amm',
+    'launchlab',
+    'raydium',
+    'raydium-cpmm',
+    'bonk',
+    'auto',
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final usingPumpPortal = state.executionMode == AutoInvestExecutionMode.pumpPortal;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Motor de ejecución', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<AutoInvestExecutionMode>(
+              initialValue: state.executionMode,
+              decoration: const InputDecoration(
+                labelText: 'Selecciona el riel de órdenes',
+              ),
+              items: AutoInvestExecutionMode.values
+                  .map(
+                    (mode) => DropdownMenuItem(
+                      value: mode,
+                      child: Text(
+                        mode == AutoInvestExecutionMode.jupiter
+                            ? 'Jupiter (tokens graduados)'
+                            : 'PumpPortal (bonding curve)',
+                      ),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (mode) {
+                if (mode != null) notifier.setExecutionMode(mode);
+              },
+            ),
+            const SizedBox(height: 8),
+            Text(
+              state.executionMode == AutoInvestExecutionMode.jupiter
+                  ? 'Usa quotes de Jupiter, ideal para tokens que ya migraron su liquidez.'
+                  : 'Construye transacciones sobre la bonding curve de pump.fun vía PumpPortal.',
+              style: theme.textTheme.bodySmall,
+            ),
+            if (usingPumpPortal) ...[
+              const SizedBox(height: 16),
+              _NumberField(
+                label: 'Slippage permitido',
+                value: state.pumpSlippagePercent,
+                suffix: '%',
+                onChanged: notifier.updatePumpSlippage,
+              ),
+              const SizedBox(height: 12),
+              _NumberField(
+                label: 'Priority fee (SOL)',
+                value: state.pumpPriorityFeeSol,
+                suffix: 'SOL',
+                onChanged: notifier.updatePumpPriorityFee,
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: state.pumpPool,
+                decoration: const InputDecoration(labelText: 'Pool preferido'),
+                items: _poolOptions
+                    .map(
+                      (pool) => DropdownMenuItem(
+                        value: pool,
+                        child: Text(pool),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) {
+                  if (value != null) notifier.updatePumpPool(value);
+                },
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _SimulationControls extends StatelessWidget {
   const _SimulationControls({
     required this.notifier,
@@ -370,7 +476,7 @@ class _SimulationControls extends StatelessWidget {
   }
 }
 
-class _NumberField extends StatelessWidget {
+class _NumberField extends StatefulWidget {
   const _NumberField({
     required this.label,
     required this.value,
@@ -384,21 +490,62 @@ class _NumberField extends StatelessWidget {
   final String? suffix;
 
   @override
+  State<_NumberField> createState() => _NumberFieldState();
+}
+
+class _NumberFieldState extends State<_NumberField> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: _format(widget.value));
+  }
+
+  @override
+  void didUpdateWidget(covariant _NumberField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.value != oldWidget.value) {
+      final text = _format(widget.value);
+      if (_controller.text != text) {
+        _controller.value = TextEditingValue(
+          text: text,
+          selection: TextSelection.collapsed(offset: text.length),
+        );
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return TextFormField(
-      key: ValueKey('$label-$value'),
-      initialValue: value.toStringAsFixed(0),
-      keyboardType: TextInputType.number,
+      controller: _controller,
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      inputFormatters: [
+        FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+      ],
       decoration: InputDecoration(
-        labelText: label,
-        suffixText: suffix,
+        labelText: widget.label,
+        suffixText: widget.suffix,
       ),
       onChanged: (text) {
-        final parsed = double.tryParse(text);
+        final normalized = text.replaceAll(',', '.');
+        final parsed = double.tryParse(normalized);
         if (parsed != null) {
-          onChanged(parsed);
+          widget.onChanged(parsed);
         }
       },
     );
+  }
+
+  String _format(double value) {
+    final isInt = value % 1 == 0;
+    return isInt ? value.toStringAsFixed(0) : value.toString();
   }
 }

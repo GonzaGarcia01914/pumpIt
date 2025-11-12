@@ -1,16 +1,14 @@
-// ignore_for_file: deprecated_member_use, depend_on_referenced_packages
+// ignore_for_file: deprecated_member_use
 
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
 import 'package:js/js.dart';
 import 'package:js/js_util.dart' as jsu;
 
-class PhantomWalletService {
+class WalletExecutionService {
   _PhantomProvider? get _provider => _phantomProvider();
 
-  bool get isAvailable =>
-      kIsWeb && _provider != null && (_provider!.isPhantom == true);
+  bool get isAvailable => _provider?.isPhantom == true;
 
   String? _currentPublicKey;
 
@@ -19,8 +17,7 @@ class PhantomWalletService {
   Future<String> connect() async {
     final provider = _provider;
     if (provider == null) {
-      throw Exception(
-          'Phantom no se encuentra disponible en esta plataforma/navegador.');
+      throw Exception('Phantom no se encuentra disponible en este navegador.');
     }
     await jsu.promiseToFuture(provider.connect());
     final publicKey = _extractPublicKey(provider);
@@ -41,21 +38,24 @@ class PhantomWalletService {
   Future<String> signAndSendBase64(String swapTxBase64) async {
     final provider = _provider;
     if (provider == null) {
-      throw Exception('Phantom no está disponible.');
+      throw Exception('Phantom no esta disponible.');
     }
-    final txBytes = Uint8List.fromList(base64Decode(swapTxBase64));
+    final txBytes = base64Decode(swapTxBase64);
     final result =
         await jsu.promiseToFuture(provider.signAndSendTransaction(txBytes));
-    if (result == null) {
-      throw Exception('Phantom no devolvió respuesta.');
-    }
     final signature = jsu.hasProperty(result, 'signature')
         ? jsu.getProperty(result, 'signature')?.toString()
         : result.toString();
     if (signature == null || signature.isEmpty) {
-      throw Exception('Phantom no devolvió signature.');
+      throw Exception('Phantom no devolvio signature.');
     }
     return signature;
+  }
+
+  Future<void> waitForConfirmation(String signature) async {
+    // Phantom ya maneja el envío; no hay RPC local para confirmar.
+    // Dejamos un pequeño delay para evitar marcar la orden inmediatamente.
+    await Future.delayed(const Duration(seconds: 1));
   }
 
   String? _extractPublicKey(_PhantomProvider provider) {
@@ -64,10 +64,11 @@ class PhantomWalletService {
     final value = jsu.callMethod(pk, 'toString', const []);
     return value?.toString();
   }
+
+  void dispose() {}
 }
 
 _PhantomProvider? _phantomProvider() {
-  if (!kIsWeb) return null;
   if (!jsu.hasProperty(jsu.globalThis, 'solana')) {
     return null;
   }

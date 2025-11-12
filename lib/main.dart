@@ -1,13 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-import 'features/auto_invest/controller/auto_invest_executor.dart';
-import 'features/auto_invest/view/auto_invest_page.dart';
-import 'features/auto_invest/view/results_page.dart';
-import 'features/featured_coins/view/featured_coin_page.dart';
+import 'package:pump_it_baby/core/storage/shared_prefs_provider.dart';
+import 'package:pump_it_baby/features/auto_invest/controller/auto_invest_executor.dart';
+import 'package:pump_it_baby/features/auto_invest/view/auto_invest_page.dart';
+import 'package:pump_it_baby/features/auto_invest/view/results_page.dart';
+import 'package:pump_it_baby/features/featured_coins/view/featured_coin_page.dart';
 
-void main() {
-  runApp(const ProviderScope(child: PumpItBabyApp()));
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final prefs = await SharedPreferences.getInstance();
+  runApp(
+    ProviderScope(
+      overrides: [
+        sharedPreferencesProvider.overrideWithValue(prefs),
+      ],
+      child: const PumpItBabyApp(),
+    ),
+  );
 }
 
 class PumpItBabyApp extends StatelessWidget {
@@ -24,10 +35,7 @@ class PumpItBabyApp extends StatelessWidget {
         brightness: Brightness.dark,
         colorSchemeSeed: Colors.tealAccent,
       ),
-      theme: ThemeData(
-        useMaterial3: true,
-        colorSchemeSeed: Colors.teal,
-      ),
+      theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.teal),
       home: const HomeTabsPage(),
     );
   }

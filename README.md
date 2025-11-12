@@ -1,129 +1,126 @@
-# Pump It Baby  Featured Bot
+# Pump It Baby · Featured Bot
 
-Escritorio Flutter que monitorea en tiempo real la seccion **featured** de
-[pump.fun](https://pump.fun) y filtra automaticamente las memecoins con un
-`market cap` USD superior a 15k. El bot trabaja con el mismo endpoint publico
-que usa la WebApp (`https://frontend-api-v3.pump.fun/coins/for-you`), procesa
-los datos y genera un resumen impulsado por IA.
+Flutter desktop/web para monitorear en tiempo real la sección **featured** de [pump.fun](https://pump.fun) y orquestar un bot de auto-invest que filtra, simula, genera insights con IA y, en desktop, puede ejecutar swaps reales vía Jupiter.
 
 ## Requisitos
 
 - Flutter 3.27+ con soporte desktop (Windows/macOS/Linux).
 - Dart 3.6+.
-- (Opcional) API key de OpenAI si se desea activar el resumen generativo.
+- Para IA: clave de OpenAI (`OPENAI_API_KEY`).
+- Para el bot real en desktop: keypair local (`id.json`) y un RPC confiable (Helius/QuickNode…).
 
-## Configuracion
+## Configuración mínima
 
-1. **Instala dependencias**
-
+1. **Dependencias**
    ```bash
    flutter pub get
    ```
 
-2. **(Opcional) habilita IA generativa**
-
-   Exporta una API key valida antes de lanzar la app:
-
+2. **IA opcional**
    ```powershell
-   # PowerShell
    $env:OPENAI_API_KEY = 'sk-xxxxx'
-   # Model opcional (por defecto gpt-4o-mini)
-   $env:OPENAI_MODEL = 'gpt-4o-mini'
+   $env:OPENAI_MODEL = 'gpt-4o-mini'   # opcional
    ```
 
-   Sin clave, el bot usa un motor heuristico que igual entrega
-   insights basados en reglas.
+3. **Variables `--dart-define`**
+   - `OPENAI_API_KEY` y `OPENAI_MODEL`.
+   - `JUPITER_BASE_URL` (default `https://quote-api.jup.ag`).
+   - `JUPITER_DEFAULT_SLIPPAGE_BPS` (default `300` = 3%).
+   - `JUPITER_PRIORITY_FEE_LAMPORTS`.
+   - `LOCAL_KEY_PATH`: ruta del `id.json` (solo desktop).
+   - `RPC_URL`: endpoint RPC donde enviar las transacciones.
+   - `PUMP_PORTAL_BASE_URL`: host de la API de PumpPortal (default `https://pumpportal.fun`).
 
-3. **Variables de entorno clave (via `--dart-define`)**
-   - `OPENAI_API_KEY`: requerido para IA (panel Featured y Resultados).
-   - `OPENAI_MODEL` (opcional, por defecto `gpt-4o-mini`).
-   - `JUPITER_BASE_URL` (opcional, default `https://quote-api.jup.ag`).
-   - `JUPITER_DEFAULT_SLIPPAGE_BPS` (por ejemplo 300 = 3%).
-   - `JUPITER_PRIORITY_FEE_LAMPORTS` para fijar el priority fee en lamports.
-   - Ejemplo completo:
-     ```bash
-     flutter run -d chrome \
-       --dart-define=OPENAI_API_KEY=sk-xxxx \
-       --dart-define=JUPITER_PRIORITY_FEE_LAMPORTS=5000
-     ```
+   Ejemplos:
+   ```bash
+   # Solo lectura/IA en web (Phantom)
+   flutter run -d chrome \
+     --dart-define=OPENAI_API_KEY=sk-xxxx \
+     --dart-define=JUPITER_PRIORITY_FEE_LAMPORTS=5000
 
-## Ejecucion
+   # Bot real en desktop (keypair local + Helius)
+   flutter run -d windows ^
+     --dart-define=LOCAL_KEY_PATH=C:\Keys\auto_bot.json ^
+     --dart-define=RPC_URL=https://mainnet.helius-rpc.com/?api-key=TU_KEY ^
+     --dart-define=OPENAI_API_KEY=sk-xxxx ^
+     --dart-define=JUPITER_PRIORITY_FEE_LAMPORTS=5000
+   ```
 
+## Ejecución
 ```bash
-flutter run -d windows   # o macos/linux segun tu SO
+flutter run -d windows   # o macos/linux
 ```
+La UI refresca cada ~25 s, filtra por market cap, ordena y alimenta un panel IA. Los filtros son editables (MC, volumen, fecha, ordenamiento) y se aplican al presionar **Aplicar filtros**.
 
-La UI refresca cada ~25s, muestra todas las monedas featured con
-`usd_market_cap >= 15000`, permite abrir la ficha en pump.fun y despliega un
-panel de insights IA en espanol. Desde la barra de filtros puedes ajustar
-dinamicamente:
-
-- Market cap minimo (USD) directo sobre el endpoint.
-- Volumen 24h minimo (USD) aplicado en la llamada.
-- Fecha minima de creacion para quedarte con tokens recientes.
-- Ordenamiento (Mayor MC, mas recientes o tokens con mas replies).
-
-Escribe los valores deseados, ajusta la fecha y presiona **Aplicar filtros** para refrescar la data en vivo.
-
-## Tests & lint
-
+## Tests
 ```bash
 flutter analyze
 flutter test
 ```
 
-## Arquitectura rapida
+## Arquitectura rápida
 
-- **Datos**: `PumpFunClient` (HTTP) consume el endpoint oficial y normaliza la
-  respuesta en `FeaturedCoin`.
-- **Estado**: `FeaturedCoinNotifier` (Riverpod) mantiene coins, errores y
-  resultado IA; incluye timer para auto-refresh.
-- **IA**: `OpenAiInsightService` (si hay API key) o fallback
-  `RuleBasedInsightService`.
-- **UI**: pestañas `Featured bot`, `Auto invest` y `Resultados` (responsive desktop/web). Featured muestra las memecoins filtradas + IA; Auto invest permite configurar el bot/simulaciones; Resultados centraliza el histórico y el análisis IA.
+- **Datos**: `PumpFunClient` consume el endpoint público real y normaliza en `FeaturedCoin`.
+- **Estado**: `FeaturedCoinNotifier` + `AutoInvestNotifier` (Riverpod) controlan filtros, IA, simulaciones y ejecución.
+- **IA**: heurístico o `OpenAiInsightService` si defines `OPENAI_API_KEY`.
+- **UI**: pestañas `Featured bot`, `Auto invest`, `Resultados`.
+- **Auto invest**: `AutoInvestExecutor` observa criterios y, cuando el bot está encendido, dispara swaps en Jupiter y firma (Phantom en web, keypair local en desktop).
 
-## Proximos pasos sugeridos
+## Simulaciones + IA
 
-- Ajustar umbrales dinamicamente desde la UI.
-- Anadir modo headless/CLI para automatizar alertas.
-- Persistir snapshots para analisis historico.
+- En **Auto invest** usa *Simular auto invest* para crear corridas sintéticas. Aparecen en **Resultados**.
+- Define `OPENAI_API_KEY` para habilitar *Analizar resultados con IA*. Obtendrás insights sobre rendimiento y ajustes sugeridos.
 
-## Cómo terminar la integración con Phantom/Jupiter
+## Auto invest (web + Phantom)
 
-1. `flutter config --enable-web` y ejecuta `flutter run -d chrome`.
-2. Instala Phantom en el navegador y permite conexiones desde `http://localhost`.
-3. En la pestaña Auto invest, conecta tu wallet (verás el address truncado) y ajusta presupuestos, filtros y reglas; enciende el switch cuando estés listo.
-4. Implementa la generación de órdenes:
-   - Usa el endpoint de Jupiter (`/quote` + `/swap`) o `https://swap-api.pump.fun` para construir la transacción (base64).
-   - Decodifica la tx en Dart, pásala a `PhantomWalletService.signAndSend()` y deja que Phantom la firme/envíe.
-   - Añade tu lógica de ejecución al notifier (ej. escanear las coins filtradas en cada refresco, gatillar compra si cumplen criterios, vigilar stop loss/take profit y vender).
-5. Usa una wallet dedicada/RPC privado y añade límites diarios/logs antes de dejarlo en producción.
-6. ¿Siguiente paso sugerido? Implementar el `ExecutionService` que consuma el estado de Auto Invest, construya swaps con Jupiter y llame a `signAndSend` cuando el bot detecte una oportunidad.
+1. `flutter config --enable-web` y `flutter run -d chrome`.
+2. Instala Phantom y permite conexiones desde `http://localhost`.
+3. En **Auto invest** conecta Phantom, ajusta criterios y activa el switch. (Recuerda que, si publicas en GitHub Pages, necesitarás un proxy propio para sortear CORS al leer pump.fun.)
 
-### Simulaciones + IA
+## Auto invest (desktop + keypair local)
 
-- Desde la pestaña **Auto invest** presiona *Simular auto invest* para crear corridas sintéticas con los filtros actuales. Se muestran en la pestaña **Resultados**.
-- Para habilitar el análisis IA de esas simulaciones define tu clave al lanzar la app:  
-  `flutter run -d chrome --dart-define=OPENAI_API_KEY=sk-xxxx`.
-- En **Resultados** pulsa *Analizar resultados con IA* para obtener un resumen de riesgos/ajustes sugeridos.
-
-## Auto Invest + Phantom en Web
-
-1. **Habilita Flutter Web**
+1. **Keypair dedicado**
    ```bash
-   flutter config --enable-web
-   flutter run -d chrome
+   solana-keygen new -o C:\Keys\auto_bot.json --no-bip39-passphrase --force
+   solana-keygen pubkey C:\Keys\auto_bot.json
    ```
-2. **Instala Phantom** en tu navegador (Chrome/Edge) y activa la opción de permitir conexiones desde `http://localhost`.
-3. **Tab “Auto invest”**
-   - Conecta/desconecta Phantom con el botón dedicado (solo web).
-   - Ajusta presupuesto total y máximo por memecoin.
-   - Define filtros (MC/volumen) y reglas de seguridad (stop loss, take profit, retirar tras ganancia).
-   - Activa el switch “Auto Invest” cuando la wallet esté conectada para que el bot empiece a monitorear con esos criterios.
-4. **Integración de órdenes**
-   - El servicio `PhantomWalletService` ya expone `connect/disconnect` y deja preparado `signAndSend`. Completa esa función construyendo swaps con [Jupiter](https://station.jup.ag/docs/apis/swap-api) o `swap-api.pump.fun` y pásalos a Phantom para que firme/envíe.
-   - Implementa la lógica de ejecución dentro del notifier (por ejemplo, comparar los filtros con la data en vivo, disparar compras al detectar oportunidades y ventas al alcanzar stop-loss/take-profit).
-5. **Buenas prácticas**
-   - Usa una wallet separada y presupuestos limitados.
-   - Trabaja con un RPC dedicado (Helius/QuickNode) para confirmar las transacciones del bot.
-   - Añade límites diarios/logs antes de habilitarlo en mainnet.
+   Guarda el archivo fuera del repo (BitLocker/FileVault) y fondea la cuenta con presupuesto limitado.
+
+2. **RPC**
+   - Usa `RPC_URL=https://api.devnet.solana.com` para probar (con `solana airdrop`).
+   - Para mainnet, un RPC privado como Helius (`https://mainnet.helius-rpc.com/?api-key=...`). Ajusta `JUPITER_PRIORITY_FEE_LAMPORTS` según la congestión.
+
+3. **Lanzar la app**
+   ```powershell
+   flutter run -d windows `
+     --dart-define=LOCAL_KEY_PATH=C:\Keys\auto_bot.json `
+     --dart-define=RPC_URL=https://mainnet.helius-rpc.com/?api-key=TU_KEY `
+     --dart-define=OPENAI_API_KEY=sk-xxxx `
+     --dart-define=JUPITER_PRIORITY_FEE_LAMPORTS=5000
+   ```
+
+4. **Operar**
+   - Pulsa *Connect wallet* (lee tu `id.json`).
+   - Ajusta filtros (MC, volumen), presupuestos y reglas de riesgo (stop loss/take profit).
+   - Enciende el switch **Auto Invest**. El bot solicitará quotes en Jupiter (o PumpPortal si lo eliges), firmará con tu key y enviará la transacción al RPC configurado.
+   - Revisa la pestaña **Resultados** para ver simulaciones y órdenes reales (txid, horario, estado).
+
+> ⚠️ Usa wallets dedicadas, preset de límites diarios y priority fees. Comienza en devnet y sube a mainnet gradualmente. Por ahora el bot ejecuta compras; vender/gestionar posiciones se añadirá en iteraciones posteriores.
+
+## Próximos pasos sugeridos
+
+- Añadir ventas/stop-loss automáticos.
+- Persistir snapshots del bot para backtesting.
+- Headless/CLI para correr el motor sin UI.
+
+## Auto invest (pump.fun bonding curve)
+
+Si quieres operar tokens que siguen en la bonding curve de pump.fun, activa el nuevo riel **PumpPortal**:
+
+1. Mantén la configuración de escritorio (keypair local + `RPC_URL`). No se requiere API key; el bot usa el endpoint público `/api/trade-local`.
+2. En la tarjeta **Motor de ejecución** selecciona *PumpPortal (bonding curve)*. Ese modo le dice al bot que solicite la transacción al servicio de PumpPortal en lugar de Jupiter.
+3. Ajusta el *slippage* permitido, la *priority fee* (en SOL) y el *pool* preferido (`pump`, `pump-amm`, `raydium`, etc.). Por defecto usamos 10 % y 0.001 SOL.
+4. Opcional: sobreescribe `PUMP_PORTAL_BASE_URL` si hospedas tu propio mirror. Si no, deja el valor por defecto.
+5. Al ejecutarse, el bot pide la transacción a PumpPortal, la firma con tu wallet local y la envía por el RPC que configuraste. Esto permite entrar a memecoins antes de que “se gradúen” y aparezcan en Jupiter.
+
+> ⚠️ PumpPortal simplemente construye la transacción; la custodia sigue en tu wallet. Aun así, opera con montos acotados, valida los mints y monitorea que la bonding curve tenga liquidez real antes de subir tamaños.

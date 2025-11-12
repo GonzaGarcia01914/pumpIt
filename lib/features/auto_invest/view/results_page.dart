@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
@@ -109,7 +111,35 @@ class _ExecutionTile extends StatelessWidget {
           'Tx $sigShort · ${record.formattedTime}',
           style: theme.textTheme.bodySmall,
         ),
-        trailing: Text(record.status),
+        trailing: Wrap(
+          spacing: 6,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            IconButton(
+              tooltip: 'Copiar signature',
+              icon: const Icon(Icons.copy, size: 18),
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: sig));
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Signature copiada')),
+                  );
+                }
+              },
+            ),
+            IconButton(
+              tooltip: 'Abrir en Solscan',
+              icon: const Icon(Icons.open_in_new, size: 18),
+              onPressed: () async {
+                final uri = Uri.parse('https://solscan.io/tx/$sig');
+                if (await canLaunchUrl(uri)) {
+                  await launchUrl(uri, mode: LaunchMode.externalApplication);
+                }
+              },
+            ),
+            Text(record.status),
+          ],
+        )
       ),
     );
   }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -5,8 +6,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../featured_coins/models/featured_coin.dart';
 import '../models/execution_record.dart';
 import '../models/simulation_models.dart';
-import '../services/phantom_wallet_service.dart';
+import '../services/auto_invest_storage.dart';
+import '../services/wallet_execution_service.dart';
 import '../services/simulation_analysis_service.dart';
+
+enum AutoInvestExecutionMode { jupiter, pumpPortal }
 
 class AutoInvestState {
   const AutoInvestState({
@@ -27,6 +31,10 @@ class AutoInvestState {
     required this.isAnalyzingResults,
     required this.analysisSummary,
     required this.executions,
+    required this.executionMode,
+    required this.pumpSlippagePercent,
+    required this.pumpPriorityFeeSol,
+    required this.pumpPool,
     this.statusMessage,
   });
 
@@ -48,6 +56,10 @@ class AutoInvestState {
         isAnalyzingResults: false,
         analysisSummary: null,
         executions: const [],
+        executionMode: AutoInvestExecutionMode.jupiter,
+        pumpSlippagePercent: 10,
+        pumpPriorityFeeSol: 0.001,
+        pumpPool: 'pump',
       );
 
   final bool isEnabled;
@@ -67,6 +79,10 @@ class AutoInvestState {
   final bool isAnalyzingResults;
   final String? analysisSummary;
   final List<ExecutionRecord> executions;
+  final AutoInvestExecutionMode executionMode;
+  final double pumpSlippagePercent;
+  final double pumpPriorityFeeSol;
+  final String pumpPool;
   final String? statusMessage;
 
   AutoInvestState copyWith({
@@ -87,6 +103,10 @@ class AutoInvestState {
     bool? isAnalyzingResults,
     String? analysisSummary,
     List<ExecutionRecord>? executions,
+    AutoInvestExecutionMode? executionMode,
+    double? pumpSlippagePercent,
+    double? pumpPriorityFeeSol,
+    String? pumpPool,
     String? statusMessage,
     bool clearMessage = false,
   }) {
@@ -108,97 +128,219 @@ class AutoInvestState {
       isAnalyzingResults: isAnalyzingResults ?? this.isAnalyzingResults,
       analysisSummary: analysisSummary ?? this.analysisSummary,
       executions: executions ?? this.executions,
+      executionMode: executionMode ?? this.executionMode,
+      pumpSlippagePercent: pumpSlippagePercent ?? this.pumpSlippagePercent,
+      pumpPriorityFeeSol: pumpPriorityFeeSol ?? this.pumpPriorityFeeSol,
+      pumpPool: pumpPool ?? this.pumpPool,
       statusMessage: clearMessage ? null : statusMessage ?? this.statusMessage,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'isEnabled': isEnabled,
+        'minMarketCap': minMarketCap,
+        'maxMarketCap': maxMarketCap,
+        'minVolume24h': minVolume24h,
+        'maxVolume24h': maxVolume24h,
+        'stopLossPercent': stopLossPercent,
+        'takeProfitPercent': takeProfitPercent,
+        'totalBudgetSol': totalBudgetSol,
+        'perCoinBudgetSol': perCoinBudgetSol,
+        'withdrawOnGain': withdrawOnGain,
+        'walletAddress': walletAddress,
+        'executionMode': executionMode.name,
+        'pumpSlippagePercent': pumpSlippagePercent,
+        'pumpPriorityFeeSol': pumpPriorityFeeSol,
+        'pumpPool': pumpPool,
+      };
+
+  static AutoInvestState fromJson(Map<String, dynamic> json) {
+    final initial = AutoInvestState.initial();
+    AutoInvestExecutionMode parseMode(String? raw) {
+      return AutoInvestExecutionMode.values.firstWhere(
+        (mode) => mode.name == raw,
+        orElse: () => AutoInvestExecutionMode.jupiter,
+      );
+    }
+
+    double readDouble(String key, double fallback) {
+      final value = json[key];
+      if (value is num) return value.toDouble();
+      return double.tryParse(value?.toString() ?? '') ?? fallback;
+    }
+
+    return AutoInvestState(
+      isEnabled: json['isEnabled'] as bool? ?? initial.isEnabled,
+      minMarketCap: readDouble('minMarketCap', initial.minMarketCap),
+      maxMarketCap: readDouble('maxMarketCap', initial.maxMarketCap),
+      minVolume24h: readDouble('minVolume24h', initial.minVolume24h),
+      maxVolume24h: readDouble('maxVolume24h', initial.maxVolume24h),
+      stopLossPercent: readDouble('stopLossPercent', initial.stopLossPercent),
+      takeProfitPercent:
+          readDouble('takeProfitPercent', initial.takeProfitPercent),
+      totalBudgetSol: readDouble('totalBudgetSol', initial.totalBudgetSol),
+      perCoinBudgetSol:
+          readDouble('perCoinBudgetSol', initial.perCoinBudgetSol),
+      withdrawOnGain: json['withdrawOnGain'] as bool? ?? initial.withdrawOnGain,
+      walletAddress: json['walletAddress'] as String?,
+      isConnecting: false,
+      isSimulationRunning: false,
+      simulations: initial.simulations,
+      isAnalyzingResults: false,
+      analysisSummary: null,
+      executions: const [],
+      statusMessage: null,
+      executionMode: parseMode(json['executionMode']?.toString()),
+      pumpSlippagePercent:
+          readDouble('pumpSlippagePercent', initial.pumpSlippagePercent),
+      pumpPriorityFeeSol:
+          readDouble('pumpPriorityFeeSol', initial.pumpPriorityFeeSol),
+      pumpPool: json['pumpPool']?.toString() ?? initial.pumpPool,
     );
   }
 }
 
 class AutoInvestNotifier extends Notifier<AutoInvestState> {
-  late final PhantomWalletService walletService;
+  late final WalletExecutionService walletService;
   late final SimulationAnalysisService analysisService;
+  late final AutoInvestStorage storage;
 
   @override
   AutoInvestState build() {
-    walletService = ref.watch(phantomWalletServiceProvider);
+    walletService = ref.watch(walletExecutionServiceProvider);
     analysisService = ref.watch(simulationAnalysisServiceProvider);
-    return AutoInvestState.initial();
+    storage = ref.watch(autoInvestStorageProvider);
+
+    var initial = storage.loadState() ?? AutoInvestState.initial();
+    final savedExecutions = storage.loadExecutions();
+    if (savedExecutions.isNotEmpty) {
+      initial = initial.copyWith(executions: savedExecutions);
+    }
+    final walletAddress = walletService.currentPublicKey;
+    if (walletAddress != null) {
+      initial = initial.copyWith(walletAddress: walletAddress);
+      Future.microtask(() {
+        _setState(state.copyWith(walletAddress: walletAddress));
+      });
+    }
+    return initial;
   }
 
   void toggleEnabled(bool value) {
-    state = state.copyWith(isEnabled: value);
+    _setState(state.copyWith(isEnabled: value));
   }
 
   void updateMinMarketCap(double value) {
-    state = state.copyWith(minMarketCap: value);
+    _setState(state.copyWith(minMarketCap: value));
   }
 
   void updateMaxMarketCap(double value) {
-    state = state.copyWith(maxMarketCap: value);
+    _setState(state.copyWith(maxMarketCap: value));
   }
 
   void updateMinVolume(double value) {
-    state = state.copyWith(minVolume24h: value);
+    _setState(state.copyWith(minVolume24h: value));
   }
 
   void updateMaxVolume(double value) {
-    state = state.copyWith(maxVolume24h: value);
+    _setState(state.copyWith(maxVolume24h: value));
   }
 
   void updateStopLoss(double value) {
-    state = state.copyWith(stopLossPercent: value);
+    _setState(state.copyWith(stopLossPercent: value));
   }
 
   void updateTakeProfit(double value) {
-    state = state.copyWith(takeProfitPercent: value);
+    _setState(state.copyWith(takeProfitPercent: value));
   }
 
   void updateTotalBudget(double value) {
-    state = state.copyWith(totalBudgetSol: value);
+    _setState(state.copyWith(totalBudgetSol: value));
   }
 
   void updatePerCoinBudget(double value) {
-    state = state.copyWith(perCoinBudgetSol: value);
+    _setState(state.copyWith(perCoinBudgetSol: value));
   }
 
   void updateWithdrawOnGain(bool value) {
-    state = state.copyWith(withdrawOnGain: value);
+    _setState(state.copyWith(withdrawOnGain: value));
+  }
+
+  void setExecutionMode(AutoInvestExecutionMode mode) {
+    if (state.executionMode == mode) return;
+    _setState(state.copyWith(executionMode: mode, clearMessage: true));
+  }
+
+  void updatePumpSlippage(double value) {
+    final normalized = value.clamp(0, 99.9);
+    _setState(
+      state.copyWith(
+        pumpSlippagePercent: normalized.toDouble(),
+        clearMessage: true,
+      ),
+    );
+  }
+
+  void updatePumpPriorityFee(double value) {
+    final normalized = value.clamp(0, 1);
+    _setState(
+      state.copyWith(
+        pumpPriorityFeeSol: normalized.toDouble(),
+        clearMessage: true,
+      ),
+    );
+  }
+
+  void updatePumpPool(String value) {
+    _setState(state.copyWith(pumpPool: value, clearMessage: true));
   }
 
   void setStatus(String message) {
-    state = state.copyWith(statusMessage: message);
+    _setState(state.copyWith(statusMessage: message), persist: false);
   }
 
   Future<void> connectWallet() async {
     if (!walletService.isAvailable) {
-      state = state.copyWith(
-        statusMessage: 'Phantom no está disponible en este entorno.',
+      _setState(
+        state.copyWith(
+          statusMessage:
+              'Wallet no disponible. En web conecta Phantom; en desktop define LOCAL_KEY_PATH.',
+        ),
+        persist: false,
       );
       return;
     }
-    state = state.copyWith(isConnecting: true, clearMessage: true);
+    _setState(state.copyWith(isConnecting: true, clearMessage: true), persist: false);
     try {
       final address = await walletService.connect();
-      state = state.copyWith(
-        walletAddress: address,
-        isConnecting: false,
-        statusMessage: 'Wallet conectada.',
+      _setState(
+        state.copyWith(
+          walletAddress: address,
+          isConnecting: false,
+          statusMessage: 'Wallet conectada.',
+        ),
       );
     } catch (error) {
-      state = state.copyWith(
-        isConnecting: false,
-        statusMessage: 'Error al conectar: $error',
+      _setState(
+        state.copyWith(
+          isConnecting: false,
+          statusMessage: 'Error al conectar: $error',
+        ),
+        persist: false,
       );
     }
   }
 
   Future<void> disconnectWallet() async {
     await walletService.disconnect();
-    state = state.copyWith(walletAddress: null, statusMessage: 'Wallet desconectada.');
+    _setState(
+      state.copyWith(walletAddress: null, statusMessage: 'Wallet desconectada.'),
+    );
   }
 
   Future<void> simulate(List<FeaturedCoin> coins) async {
     if (state.isSimulationRunning) return;
-    state = state.copyWith(isSimulationRunning: true, clearMessage: true);
+    _setState(state.copyWith(isSimulationRunning: true, clearMessage: true), persist: false);
     try {
       final trades = <SimulationTrade>[];
       final rand = Random();
@@ -225,9 +367,12 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
         );
       }
       if (trades.isEmpty) {
-        state = state.copyWith(
-          isSimulationRunning: false,
-          statusMessage: 'No se encontraron tokens que cumplan criterios actuales.',
+        _setState(
+          state.copyWith(
+            isSimulationRunning: false,
+            statusMessage: 'No se encontraron tokens que cumplan criterios actuales.',
+          ),
+          persist: false,
         );
         return;
       }
@@ -239,61 +384,118 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
         trades: trades,
       );
       final updated = [...state.simulations, run];
-      state = state.copyWith(
-        simulations: updated,
-        isSimulationRunning: false,
-        statusMessage:
-            'Simulación creada (${trades.length} operaciones, PnL total ${run.totalPnlSol.toStringAsFixed(2)} SOL).',
+      _setState(
+        state.copyWith(
+          simulations: updated,
+          isSimulationRunning: false,
+          statusMessage:
+              'Simulación creada (${trades.length} operaciones, PnL total ${run.totalPnlSol.toStringAsFixed(2)} SOL).',
+        ),
+        persist: false,
       );
     } catch (error) {
-      state = state.copyWith(
-        isSimulationRunning: false,
-        statusMessage: 'Error simulando: $error',
+      _setState(
+        state.copyWith(
+          isSimulationRunning: false,
+          statusMessage: 'Error simulando: $error',
+        ),
+        persist: false,
       );
     }
   }
 
   Future<void> analyzeSimulations() async {
     if (state.simulations.isEmpty) {
-      state = state.copyWith(
-        statusMessage: 'No hay simulaciones para analizar.',
+      _setState(
+        state.copyWith(
+          statusMessage: 'No hay simulaciones para analizar.',
+        ),
+        persist: false,
       );
       return;
     }
     if (!analysisService.isEnabled) {
-      state = state.copyWith(
-        statusMessage:
-            'Define OPENAI_API_KEY via --dart-define para habilitar el análisis IA.',
+      _setState(
+        state.copyWith(
+          statusMessage:
+              'Define OPENAI_API_KEY via --dart-define para habilitar el análisis IA.',
+        ),
+        persist: false,
       );
       return;
     }
-    state = state.copyWith(isAnalyzingResults: true, clearMessage: true);
+    _setState(state.copyWith(isAnalyzingResults: true, clearMessage: true), persist: false);
     try {
       final summary = await analysisService.summarize(state.simulations);
-      state = state.copyWith(
-        isAnalyzingResults: false,
-        analysisSummary: summary,
-        statusMessage: 'Análisis IA actualizado.',
+      _setState(
+        state.copyWith(
+          isAnalyzingResults: false,
+          analysisSummary: summary,
+          statusMessage: 'Análisis IA actualizado.',
+        ),
+        persist: false,
       );
     } catch (error) {
-      state = state.copyWith(
-        isAnalyzingResults: false,
-        statusMessage: 'Error analizando: $error',
+      _setState(
+        state.copyWith(
+          isAnalyzingResults: false,
+          statusMessage: 'Error analizando: $error',
+        ),
+        persist: false,
       );
     }
+  }
+
+  void _setState(AutoInvestState newState, {bool persist = true}) {
+    state = newState;
+    if (persist) {
+      _persistState();
+    }
+  }
+
+  void _persistState() {
+    unawaited(storage.saveState(state));
+    unawaited(storage.saveExecutions(state.executions));
   }
 
   void recordExecution(ExecutionRecord record) {
     final updated = [...state.executions, record];
-    state = state.copyWith(
-      executions: updated,
-      statusMessage: 'Orden ${record.side} enviada (${record.symbol}).',
+    _setState(
+      state.copyWith(
+        executions: updated,
+        statusMessage: 'Orden ${record.side} enviada (${record.symbol}).',
+      ),
     );
   }
 
   void recordExecutionError(String symbol, String error) {
-    state = state.copyWith(
-      statusMessage: 'Error en orden ($symbol): $error',
+    _setState(
+      state.copyWith(
+        statusMessage: 'Error en orden ($symbol): $error',
+      ),
+      persist: false,
+    );
+  }
+
+  void updateExecutionStatus(
+    String signature, {
+    required String status,
+    String? errorMessage,
+  }) {
+    final updated = state.executions
+        .map(
+          (record) => record.txSignature == signature
+              ? record.copyWith(status: status, errorMessage: errorMessage)
+              : record,
+        )
+        .toList();
+    _setState(
+      state.copyWith(
+        executions: updated,
+        statusMessage: errorMessage == null
+            ? 'Orden $status ($signature).'
+            : 'Orden $status ($signature): $errorMessage',
+      ),
     );
   }
 }
