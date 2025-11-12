@@ -64,10 +64,12 @@ class WalletExecutionService {
   }
 
   Future<void> waitForConfirmation(String signature) async {
+    // Use `confirmed` to reduce timeouts during congestion. Finalization can take long
+    // and trigger TimeoutException even when the tx eventually lands.
     final notification = await _connection.confirmTransaction(
       signature,
       config: const solana.ConfirmTransactionConfig(
-        commitment: solana.Commitment.finalized,
+        commitment: solana.Commitment.confirmed,
       ),
     );
     final err = notification.err;
