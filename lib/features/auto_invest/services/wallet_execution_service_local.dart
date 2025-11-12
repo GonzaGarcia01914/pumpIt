@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:solana_web3/solana_web3.dart' as solana;
+import 'package:solana_web3/src/crypto/nacl.dart' as nacl;
 
 const _localKeyPath = String.fromEnvironment('LOCAL_KEY_PATH', defaultValue: '');
 const _rpcUrl = String.fromEnvironment(
@@ -49,18 +50,28 @@ class WalletExecutionService {
     if (keypair == null) {
       throw Exception('Wallet local no cargada.');
     }
-    final txBytes = base64Decode(swapTxBase64);
-    final transaction = solana.Transaction.deserialize(txBytes);
-    transaction.sign([keypair]);
-
-    final signature = await _connection.sendTransaction(
-      transaction,
-      config: const solana.SendTransactionConfig(
-        skipPreflight: true,
-        preflightCommitment: solana.Commitment.confirmed,
-      ),
-    );
-    return signature;
+    try {
+      final signedBytes = _signRawTransaction(
+        base64Decode(swapTxBase64),
+        keypair,
+      );
+      final signature = await _connection.sendSignedTransaction(
+        base64Encode(signedBytes),
+        config: const solana.SendTransactionConfig(
+          skipPreflight: false,
+          maxRetries: 3,
+          preflightCommitment: solana.Commitment.confirmed,
+        ),
+      );
+      return signature;
+    } on solana.JsonRpcException catch (error) {
+      final code = error.code;
+      final message = error.message;
+      final details = error.data;
+      throw Exception(
+        'RPC rechazó la transacción (code $code): $message ${details == null ? '' : details.toString()}',
+      );
+    }
   }
 
   Future<void> waitForConfirmation(String signature) async {
@@ -100,7 +111,51 @@ class WalletExecutionService {
     return solana.Cluster(uri);
   }
 
+  Uint8List _signRawTransaction(Uint8List txBytes, solana.Keypair keypair) {
+    final reader = _ShortVecReader(txBytes);
+    final sigCount = reader.readLength();
+    final signaturesOffset = reader.offset;
+    final signaturesLen = sigCount * nacl.signatureLength;
+    final messageOffset = signaturesOffset + signaturesLen;
+    if (messageOffset >= txBytes.length) {
+      throw Exception('Transacción inválida: sin sección de mensaje.');
+    }
+    final messageBytes = Uint8List.sublistView(txBytes, messageOffset);
+    final signature = nacl.sign.detached.sync(messageBytes, keypair.seckey);
+    final signed = Uint8List.fromList(txBytes);
+    signed.setRange(
+      signaturesOffset,
+      signaturesOffset + nacl.signatureLength,
+      signature,
+    );
+    return signed;
+  }
+
   void dispose() {
     _connection.dispose();
+  }
+}
+
+class _ShortVecReader {
+  _ShortVecReader(this.data);
+
+  final Uint8List data;
+  int offset = 0;
+
+  int readLength() {
+    int len = 0;
+    int size = 0;
+    while (true) {
+      if (offset >= data.length) {
+        throw Exception('Transacción incompleta (shortvec).');
+      }
+      final byte = data[offset++];
+      len |= (byte & 0x7f) << (7 * size);
+      size += 1;
+      if ((byte & 0x80) == 0) {
+        break;
+      }
+    }
+    return len;
   }
 }
