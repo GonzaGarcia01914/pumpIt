@@ -41,8 +41,9 @@ class WalletExecutionService {
       throw Exception('Phantom no esta disponible.');
     }
     final txBytes = base64Decode(swapTxBase64);
-    final result =
-        await jsu.promiseToFuture(provider.signAndSendTransaction(txBytes));
+    final result = await jsu.promiseToFuture(
+      provider.signAndSendTransaction(txBytes),
+    );
     final signature = jsu.hasProperty(result, 'signature')
         ? jsu.getProperty(result, 'signature')?.toString()
         : result.toString();
@@ -57,6 +58,17 @@ class WalletExecutionService {
     // Dejamos un pequeño delay para evitar marcar la orden inmediatamente.
     await Future.delayed(const Duration(seconds: 1));
   }
+
+  Future<double?> readTokenAmountFromTransaction({
+    required String signature,
+    required String owner,
+    required String mint,
+  }) async {
+    // No tenemos acceso a un RPC configurable en web, devolvemos null.
+    return null;
+  }
+
+  Future<int> getMintDecimals(String mint) async => 6;
 
   String? _extractPublicKey(_PhantomProvider provider) {
     final pk = provider.publicKey;

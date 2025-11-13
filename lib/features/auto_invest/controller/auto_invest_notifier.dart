@@ -1,16 +1,16 @@
 import 'dart:async';
-import 'dart:math';
+import 'dart:math' as math;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../featured_coins/models/featured_coin.dart';
 import '../models/execution_record.dart';
+import '../models/execution_mode.dart';
+import '../models/position.dart';
 import '../models/simulation_models.dart';
 import '../services/auto_invest_storage.dart';
 import '../services/wallet_execution_service.dart';
 import '../services/simulation_analysis_service.dart';
-
-enum AutoInvestExecutionMode { jupiter, pumpPortal }
 
 class AutoInvestState {
   const AutoInvestState({
@@ -22,6 +22,7 @@ class AutoInvestState {
     required this.stopLossPercent,
     required this.takeProfitPercent,
     required this.totalBudgetSol,
+    required this.availableBudgetSol,
     required this.perCoinBudgetSol,
     required this.withdrawOnGain,
     required this.walletAddress,
@@ -31,36 +32,43 @@ class AutoInvestState {
     required this.isAnalyzingResults,
     required this.analysisSummary,
     required this.executions,
+    required this.positions,
     required this.executionMode,
     required this.pumpSlippagePercent,
     required this.pumpPriorityFeeSol,
     required this.pumpPool,
+    required this.realizedProfitSol,
+    required this.withdrawnProfitSol,
     this.statusMessage,
   });
 
   factory AutoInvestState.initial() => AutoInvestState(
-        isEnabled: false,
-        minMarketCap: 15000,
-        maxMarketCap: 250000,
-        minVolume24h: 0,
-        maxVolume24h: 500000,
-        stopLossPercent: 20,
-        takeProfitPercent: 60,
-        totalBudgetSol: 10,
-        perCoinBudgetSol: 0.5,
-        withdrawOnGain: true,
-        walletAddress: null,
-        isConnecting: false,
-        isSimulationRunning: false,
-        simulations: const [],
-        isAnalyzingResults: false,
-        analysisSummary: null,
-        executions: const [],
-        executionMode: AutoInvestExecutionMode.jupiter,
-        pumpSlippagePercent: 10,
-        pumpPriorityFeeSol: 0.001,
-        pumpPool: 'pump',
-      );
+    isEnabled: false,
+    minMarketCap: 15000,
+    maxMarketCap: 250000,
+    minVolume24h: 0,
+    maxVolume24h: 500000,
+    stopLossPercent: 20,
+    takeProfitPercent: 60,
+    totalBudgetSol: 10,
+    availableBudgetSol: 10,
+    perCoinBudgetSol: 0.5,
+    withdrawOnGain: true,
+    walletAddress: null,
+    isConnecting: false,
+    isSimulationRunning: false,
+    simulations: const [],
+    isAnalyzingResults: false,
+    analysisSummary: null,
+    executions: const [],
+    positions: const [],
+    executionMode: AutoInvestExecutionMode.jupiter,
+    pumpSlippagePercent: 10,
+    pumpPriorityFeeSol: 0.001,
+    pumpPool: 'pump',
+    realizedProfitSol: 0,
+    withdrawnProfitSol: 0,
+  );
 
   final bool isEnabled;
   final double minMarketCap;
@@ -70,6 +78,7 @@ class AutoInvestState {
   final double stopLossPercent;
   final double takeProfitPercent;
   final double totalBudgetSol;
+  final double availableBudgetSol;
   final double perCoinBudgetSol;
   final bool withdrawOnGain;
   final String? walletAddress;
@@ -79,11 +88,17 @@ class AutoInvestState {
   final bool isAnalyzingResults;
   final String? analysisSummary;
   final List<ExecutionRecord> executions;
+  final List<OpenPosition> positions;
   final AutoInvestExecutionMode executionMode;
   final double pumpSlippagePercent;
   final double pumpPriorityFeeSol;
   final String pumpPool;
+  final double realizedProfitSol;
+  final double withdrawnProfitSol;
   final String? statusMessage;
+
+  double get deployedBudgetSol =>
+      (totalBudgetSol - availableBudgetSol).clamp(0, double.infinity);
 
   AutoInvestState copyWith({
     bool? isEnabled,
@@ -94,6 +109,7 @@ class AutoInvestState {
     double? stopLossPercent,
     double? takeProfitPercent,
     double? totalBudgetSol,
+    double? availableBudgetSol,
     double? perCoinBudgetSol,
     bool? withdrawOnGain,
     String? walletAddress,
@@ -103,10 +119,13 @@ class AutoInvestState {
     bool? isAnalyzingResults,
     String? analysisSummary,
     List<ExecutionRecord>? executions,
+    List<OpenPosition>? positions,
     AutoInvestExecutionMode? executionMode,
     double? pumpSlippagePercent,
     double? pumpPriorityFeeSol,
     String? pumpPool,
+    double? realizedProfitSol,
+    double? withdrawnProfitSol,
     String? statusMessage,
     bool clearMessage = false,
   }) {
@@ -119,6 +138,7 @@ class AutoInvestState {
       stopLossPercent: stopLossPercent ?? this.stopLossPercent,
       takeProfitPercent: takeProfitPercent ?? this.takeProfitPercent,
       totalBudgetSol: totalBudgetSol ?? this.totalBudgetSol,
+      availableBudgetSol: availableBudgetSol ?? this.availableBudgetSol,
       perCoinBudgetSol: perCoinBudgetSol ?? this.perCoinBudgetSol,
       withdrawOnGain: withdrawOnGain ?? this.withdrawOnGain,
       walletAddress: walletAddress ?? this.walletAddress,
@@ -128,31 +148,38 @@ class AutoInvestState {
       isAnalyzingResults: isAnalyzingResults ?? this.isAnalyzingResults,
       analysisSummary: analysisSummary ?? this.analysisSummary,
       executions: executions ?? this.executions,
+      positions: positions ?? this.positions,
       executionMode: executionMode ?? this.executionMode,
       pumpSlippagePercent: pumpSlippagePercent ?? this.pumpSlippagePercent,
       pumpPriorityFeeSol: pumpPriorityFeeSol ?? this.pumpPriorityFeeSol,
       pumpPool: pumpPool ?? this.pumpPool,
+      realizedProfitSol: realizedProfitSol ?? this.realizedProfitSol,
+      withdrawnProfitSol: withdrawnProfitSol ?? this.withdrawnProfitSol,
       statusMessage: clearMessage ? null : statusMessage ?? this.statusMessage,
     );
   }
 
   Map<String, dynamic> toJson() => {
-        'isEnabled': isEnabled,
-        'minMarketCap': minMarketCap,
-        'maxMarketCap': maxMarketCap,
-        'minVolume24h': minVolume24h,
-        'maxVolume24h': maxVolume24h,
-        'stopLossPercent': stopLossPercent,
-        'takeProfitPercent': takeProfitPercent,
-        'totalBudgetSol': totalBudgetSol,
-        'perCoinBudgetSol': perCoinBudgetSol,
-        'withdrawOnGain': withdrawOnGain,
-        'walletAddress': walletAddress,
-        'executionMode': executionMode.name,
-        'pumpSlippagePercent': pumpSlippagePercent,
-        'pumpPriorityFeeSol': pumpPriorityFeeSol,
-        'pumpPool': pumpPool,
-      };
+    'isEnabled': isEnabled,
+    'minMarketCap': minMarketCap,
+    'maxMarketCap': maxMarketCap,
+    'minVolume24h': minVolume24h,
+    'maxVolume24h': maxVolume24h,
+    'stopLossPercent': stopLossPercent,
+    'takeProfitPercent': takeProfitPercent,
+    'totalBudgetSol': totalBudgetSol,
+    'availableBudgetSol': availableBudgetSol,
+    'perCoinBudgetSol': perCoinBudgetSol,
+    'withdrawOnGain': withdrawOnGain,
+    'walletAddress': walletAddress,
+    'executionMode': executionMode.name,
+    'pumpSlippagePercent': pumpSlippagePercent,
+    'pumpPriorityFeeSol': pumpPriorityFeeSol,
+    'pumpPool': pumpPool,
+    'realizedProfitSol': realizedProfitSol,
+    'withdrawnProfitSol': withdrawnProfitSol,
+    'positions': positions.map((p) => p.toJson()).toList(growable: false),
+  };
 
   static AutoInvestState fromJson(Map<String, dynamic> json) {
     final initial = AutoInvestState.initial();
@@ -169,6 +196,28 @@ class AutoInvestState {
       return double.tryParse(value?.toString() ?? '') ?? fallback;
     }
 
+    final positions =
+        (json['positions'] as List<dynamic>?)
+            ?.whereType<Map<String, dynamic>>()
+            .map(OpenPosition.fromJson)
+            .toList() ??
+        initial.positions;
+    final deployedFromPositions = positions.fold<double>(
+      0,
+      (sum, position) => sum + position.entrySol,
+    );
+    final totalBudget = readDouble('totalBudgetSol', initial.totalBudgetSol);
+    final availableBudgetRaw = json['availableBudgetSol'];
+    double derivedAvailable = totalBudget - deployedFromPositions;
+    if (derivedAvailable < 0) {
+      derivedAvailable = 0;
+    } else if (derivedAvailable > totalBudget) {
+      derivedAvailable = totalBudget;
+    }
+    final availableBudget = availableBudgetRaw == null
+        ? derivedAvailable
+        : readDouble('availableBudgetSol', totalBudget);
+
     return AutoInvestState(
       isEnabled: json['isEnabled'] as bool? ?? initial.isEnabled,
       minMarketCap: readDouble('minMarketCap', initial.minMarketCap),
@@ -176,11 +225,16 @@ class AutoInvestState {
       minVolume24h: readDouble('minVolume24h', initial.minVolume24h),
       maxVolume24h: readDouble('maxVolume24h', initial.maxVolume24h),
       stopLossPercent: readDouble('stopLossPercent', initial.stopLossPercent),
-      takeProfitPercent:
-          readDouble('takeProfitPercent', initial.takeProfitPercent),
+      takeProfitPercent: readDouble(
+        'takeProfitPercent',
+        initial.takeProfitPercent,
+      ),
       totalBudgetSol: readDouble('totalBudgetSol', initial.totalBudgetSol),
-      perCoinBudgetSol:
-          readDouble('perCoinBudgetSol', initial.perCoinBudgetSol),
+      availableBudgetSol: availableBudget,
+      perCoinBudgetSol: readDouble(
+        'perCoinBudgetSol',
+        initial.perCoinBudgetSol,
+      ),
       withdrawOnGain: json['withdrawOnGain'] as bool? ?? initial.withdrawOnGain,
       walletAddress: json['walletAddress'] as String?,
       isConnecting: false,
@@ -191,11 +245,24 @@ class AutoInvestState {
       executions: const [],
       statusMessage: null,
       executionMode: parseMode(json['executionMode']?.toString()),
-      pumpSlippagePercent:
-          readDouble('pumpSlippagePercent', initial.pumpSlippagePercent),
-      pumpPriorityFeeSol:
-          readDouble('pumpPriorityFeeSol', initial.pumpPriorityFeeSol),
+      pumpSlippagePercent: readDouble(
+        'pumpSlippagePercent',
+        initial.pumpSlippagePercent,
+      ),
+      pumpPriorityFeeSol: readDouble(
+        'pumpPriorityFeeSol',
+        initial.pumpPriorityFeeSol,
+      ),
       pumpPool: json['pumpPool']?.toString() ?? initial.pumpPool,
+      positions: positions,
+      realizedProfitSol: readDouble(
+        'realizedProfitSol',
+        initial.realizedProfitSol,
+      ),
+      withdrawnProfitSol: readDouble(
+        'withdrawnProfitSol',
+        initial.withdrawnProfitSol,
+      ),
     );
   }
 }
@@ -215,6 +282,10 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     final savedExecutions = storage.loadExecutions();
     if (savedExecutions.isNotEmpty) {
       initial = initial.copyWith(executions: savedExecutions);
+    }
+    final savedPositions = storage.loadPositions();
+    if (savedPositions.isNotEmpty) {
+      initial = initial.copyWith(positions: savedPositions);
     }
     final walletAddress = walletService.currentPublicKey;
     if (walletAddress != null) {
@@ -255,7 +326,19 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
   }
 
   void updateTotalBudget(double value) {
-    _setState(state.copyWith(totalBudgetSol: value));
+    final deployed = state.deployedBudgetSol;
+    var adjustedAvailable = value - deployed;
+    if (adjustedAvailable < 0) {
+      adjustedAvailable = 0;
+    } else if (adjustedAvailable > value) {
+      adjustedAvailable = value;
+    }
+    _setState(
+      state.copyWith(
+        totalBudgetSol: value,
+        availableBudgetSol: adjustedAvailable,
+      ),
+    );
   }
 
   void updatePerCoinBudget(double value) {
@@ -310,7 +393,10 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
       );
       return;
     }
-    _setState(state.copyWith(isConnecting: true, clearMessage: true), persist: false);
+    _setState(
+      state.copyWith(isConnecting: true, clearMessage: true),
+      persist: false,
+    );
     try {
       final address = await walletService.connect();
       _setState(
@@ -334,16 +420,22 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
   Future<void> disconnectWallet() async {
     await walletService.disconnect();
     _setState(
-      state.copyWith(walletAddress: null, statusMessage: 'Wallet desconectada.'),
+      state.copyWith(
+        walletAddress: null,
+        statusMessage: 'Wallet desconectada.',
+      ),
     );
   }
 
   Future<void> simulate(List<FeaturedCoin> coins) async {
     if (state.isSimulationRunning) return;
-    _setState(state.copyWith(isSimulationRunning: true, clearMessage: true), persist: false);
+    _setState(
+      state.copyWith(isSimulationRunning: true, clearMessage: true),
+      persist: false,
+    );
     try {
       final trades = <SimulationTrade>[];
-      final rand = Random();
+      final rand = math.Random();
       for (final coin in coins) {
         if (coin.usdMarketCap < state.minMarketCap ||
             coin.usdMarketCap > state.maxMarketCap) {
@@ -351,7 +443,8 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
         }
         final entry = state.perCoinBudgetSol.clamp(0.1, state.totalBudgetSol);
         final range = state.takeProfitPercent + state.stopLossPercent;
-        final deltaPercent = (rand.nextDouble() * range) - state.stopLossPercent;
+        final deltaPercent =
+            (rand.nextDouble() * range) - state.stopLossPercent;
         final pnl = entry * deltaPercent / 100;
         trades.add(
           SimulationTrade(
@@ -370,7 +463,8 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
         _setState(
           state.copyWith(
             isSimulationRunning: false,
-            statusMessage: 'No se encontraron tokens que cumplan criterios actuales.',
+            statusMessage:
+                'No se encontraron tokens que cumplan criterios actuales.',
           ),
           persist: false,
         );
@@ -407,9 +501,7 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
   Future<void> analyzeSimulations() async {
     if (state.simulations.isEmpty) {
       _setState(
-        state.copyWith(
-          statusMessage: 'No hay simulaciones para analizar.',
-        ),
+        state.copyWith(statusMessage: 'No hay simulaciones para analizar.'),
         persist: false,
       );
       return;
@@ -424,7 +516,10 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
       );
       return;
     }
-    _setState(state.copyWith(isAnalyzingResults: true, clearMessage: true), persist: false);
+    _setState(
+      state.copyWith(isAnalyzingResults: true, clearMessage: true),
+      persist: false,
+    );
     try {
       final summary = await analysisService.summarize(state.simulations);
       _setState(
@@ -456,6 +551,7 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
   void _persistState() {
     unawaited(storage.saveState(state));
     unawaited(storage.saveExecutions(state.executions));
+    unawaited(storage.savePositions(state.positions));
   }
 
   void recordExecution(ExecutionRecord record) {
@@ -468,11 +564,144 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     );
   }
 
-  void recordExecutionError(String symbol, String error) {
+  void recordPositionEntry({
+    required String mint,
+    required String symbol,
+    required double solAmount,
+    required String txSignature,
+    required AutoInvestExecutionMode executionMode,
+  }) {
+    final existing = state.positions
+        .where((position) => position.entrySignature != txSignature)
+        .toList(growable: true);
+    existing.add(
+      OpenPosition(
+        mint: mint,
+        symbol: symbol,
+        entrySol: solAmount,
+        entrySignature: txSignature,
+        openedAt: DateTime.now(),
+        executionMode: executionMode,
+      ),
+    );
+    var nextAvailable = state.availableBudgetSol - solAmount;
+    if (nextAvailable < 0) {
+      nextAvailable = 0;
+    } else if (nextAvailable > state.totalBudgetSol) {
+      nextAvailable = state.totalBudgetSol;
+    }
+    _setState(
+      state.copyWith(positions: existing, availableBudgetSol: nextAvailable),
+    );
+  }
+
+  void updatePositionAmount(String txSignature, double tokenAmount) {
+    final updated = state.positions
+        .map(
+          (position) => position.entrySignature == txSignature
+              ? position.copyWith(tokenAmount: tokenAmount)
+              : position,
+        )
+        .toList();
+    _setState(state.copyWith(positions: updated));
+  }
+
+  void setPositionClosing(String txSignature, bool isClosing) {
+    final updated = state.positions
+        .map(
+          (position) => position.entrySignature == txSignature
+              ? position.copyWith(isClosing: isClosing)
+              : position,
+        )
+        .toList(growable: false);
+    _setState(state.copyWith(positions: updated));
+  }
+
+  void completePositionSale({
+    required OpenPosition position,
+    required String sellSignature,
+    required double realizedSol,
+  }) {
+    final entry = position.entrySol;
+    final pnl = realizedSol - entry;
+    final remaining = state.positions
+        .where((p) => p.entrySignature != position.entrySignature)
+        .toList(growable: false);
+    var nextTotal = state.totalBudgetSol + pnl;
+    if (nextTotal < 0) {
+      nextTotal = 0;
+    }
+    var nextAvailable = state.availableBudgetSol + realizedSol;
+    if (nextAvailable < 0) {
+      nextAvailable = 0;
+    } else if (nextAvailable > nextTotal) {
+      nextAvailable = nextTotal;
+    }
+    var withdrawn = state.withdrawnProfitSol;
+    if (state.withdrawOnGain && pnl > 0) {
+      nextTotal -= pnl;
+      if (nextTotal < 0) {
+        nextTotal = 0;
+      }
+      nextAvailable -= pnl;
+      if (nextAvailable < 0) {
+        nextAvailable = 0;
+      } else if (nextAvailable > nextTotal) {
+        nextAvailable = nextTotal;
+      }
+      withdrawn += pnl;
+    }
     _setState(
       state.copyWith(
-        statusMessage: 'Error en orden ($symbol): $error',
+        positions: remaining,
+        totalBudgetSol: nextTotal,
+        availableBudgetSol: nextAvailable,
+        realizedProfitSol: state.realizedProfitSol + pnl,
+        withdrawnProfitSol: withdrawn,
+        statusMessage:
+            'Posición ${position.symbol} cerrada (${pnl >= 0 ? '+' : ''}${pnl.toStringAsFixed(3)} SOL).',
       ),
+    );
+  }
+
+  void updatePositionMonitoring(
+    String txSignature, {
+    required double priceSol,
+    required double currentValueSol,
+    required double pnlSol,
+    double? pnlPercent,
+    required DateTime checkedAt,
+    PositionAlertType? alertType,
+    DateTime? alertTriggeredAt,
+    bool updateAlert = false,
+  }) {
+    final updated = state.positions
+        .map((position) {
+          if (position.entrySignature != txSignature) {
+            return position;
+          }
+          var next = position.copyWith(
+            lastPriceSol: priceSol,
+            currentValueSol: currentValueSol,
+            pnlSol: pnlSol,
+            pnlPercent: pnlPercent,
+            lastCheckedAt: checkedAt,
+          );
+          if (updateAlert) {
+            next = next.copyWith(
+              alertType: alertType,
+              alertTriggeredAt: alertTriggeredAt,
+            );
+          }
+          return next;
+        })
+        .toList(growable: false);
+    _setState(state.copyWith(positions: updated));
+  }
+
+  void recordExecutionError(String symbol, String error) {
+    _setState(
+      state.copyWith(statusMessage: 'Error en orden ($symbol): $error'),
       persist: false,
     );
   }
@@ -501,4 +730,6 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
 }
 
 final autoInvestProvider =
-    NotifierProvider<AutoInvestNotifier, AutoInvestState>(AutoInvestNotifier.new);
+    NotifierProvider<AutoInvestNotifier, AutoInvestState>(
+      AutoInvestNotifier.new,
+    );

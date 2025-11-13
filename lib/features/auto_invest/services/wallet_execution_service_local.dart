@@ -1,11 +1,17 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:http/http.dart' as http;
 import 'package:solana_web3/solana_web3.dart' as solana;
+// ignore: implementation_imports
 import 'package:solana_web3/src/crypto/nacl.dart' as nacl;
 
-const _localKeyPath = String.fromEnvironment('LOCAL_KEY_PATH', defaultValue: '');
+const _localKeyPath = String.fromEnvironment(
+  'LOCAL_KEY_PATH',
+  defaultValue: '',
+);
 const _rpcUrl = String.fromEnvironment(
   'RPC_URL',
   defaultValue: 'https://api.mainnet-beta.solana.com',
@@ -25,6 +31,7 @@ class WalletExecutionService {
 
   late final solana.Connection _connection;
   solana.Keypair? _keypair;
+  final Map<String, int> _mintDecimalsCache = {};
 
   bool get isAvailable => _keypair != null;
 
@@ -89,6 +96,33 @@ class WalletExecutionService {
     }
   }
 
+  Future<double?> readTokenAmountFromTransaction({
+    required String signature,
+    required String owner,
+    required String mint,
+  }) async {
+    try {
+      return await _tryReadTokenAmount(signature, owner, mint);
+    } catch (error) {
+      throw Exception('Lectura de fill falló: $error');
+    }
+  }
+
+  Future<int> getMintDecimals(String mint) async {
+    final cached = _mintDecimalsCache[mint];
+    if (cached != null) return cached;
+    try {
+      final supply = await _connection.getTokenSupply(
+        solana.Pubkey.fromBase58(mint),
+      );
+      final decimals = supply.decimals;
+      _mintDecimalsCache[mint] = decimals;
+      return decimals;
+    } catch (_) {
+      return 6;
+    }
+  }
+
   void _loadKeypairSync() {
     if (_localKeyPath.isEmpty) {
       return;
@@ -129,6 +163,216 @@ class WalletExecutionService {
       signature,
     );
     return signed;
+  }
+
+  double? _findBalance(
+    List<solana.TokenBalance>? balances,
+    String owner,
+    String mint,
+  ) {
+    if (balances == null || balances.isEmpty) return null;
+    solana.TokenBalance? match;
+    for (final entry in balances) {
+      if (entry.owner == owner && entry.mint == mint) {
+        match = entry;
+        break;
+      }
+    }
+    if (match == null) return null;
+    final uiString = match.uiTokenAmount.uiAmountString;
+    final maybeUi = double.tryParse(uiString);
+    if (maybeUi != null) {
+      return maybeUi;
+    }
+    final raw = double.tryParse(match.uiTokenAmount.amount);
+    if (raw == null) {
+      return null;
+    }
+    final decimals = match.uiTokenAmount.decimals.toDouble();
+    return raw / math.pow(10, decimals);
+  }
+
+  Future<double?> _tryReadTokenAmount(
+    String signature,
+    String owner,
+    String mint,
+  ) async {
+    try {
+      return await _readTokenAmountWithClient(signature, owner, mint);
+    } on TypeError catch (_) {
+      return await _readTokenAmountFromRpc(signature, owner, mint);
+    }
+  }
+
+  Future<double?> _readTokenAmountWithClient(
+    String signature,
+    String owner,
+    String mint,
+  ) async {
+    final tx = await _connection.getTransaction(
+      signature,
+      config: solana.GetTransactionConfig(
+        encoding: solana.TransactionEncoding.jsonParsed,
+        commitment: solana.Commitment.confirmed,
+        maxSupportedTransactionVersion: 0,
+      ),
+    );
+    final meta = tx?.meta;
+    if (meta == null) return null;
+    final pre = _findBalance(meta.preTokenBalances, owner, mint);
+    final post = _findBalance(meta.postTokenBalances, owner, mint);
+    return _computeTokenDelta(pre, post);
+  }
+
+  Future<double?> _readTokenAmountFromRpc(
+    String signature,
+    String owner,
+    String mint,
+  ) async {
+    final result = await _fetchTransactionResult(signature);
+    if (result == null) return null;
+    final meta = result['meta'] as Map<String, dynamic>?;
+    if (meta == null) return null;
+    final accountKeys = _extractAccountKeys(result);
+    final pre = _findDynamicBalance(
+      meta['preTokenBalances'] as List<dynamic>?,
+      owner,
+      mint,
+      accountKeys,
+    );
+    final post = _findDynamicBalance(
+      meta['postTokenBalances'] as List<dynamic>?,
+      owner,
+      mint,
+      accountKeys,
+    );
+    return _computeTokenDelta(pre, post);
+  }
+
+  Future<Map<String, dynamic>?> _fetchTransactionResult(
+    String signature,
+  ) async {
+    final response = await http.post(
+      Uri.parse(_rpcUrl),
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'jsonrpc': '2.0',
+        'id': 'auto-invest-fill',
+        'method': 'getTransaction',
+        'params': [
+          signature,
+          {
+            'encoding': 'jsonParsed',
+            'commitment': 'confirmed',
+            'maxSupportedTransactionVersion': 0,
+          },
+        ],
+      }),
+    );
+    if (response.statusCode != 200) {
+      throw Exception('RPC respondió ${response.statusCode}: ${response.body}');
+    }
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map<String, dynamic>) {
+      throw Exception('Respuesta RPC inválida.');
+    }
+    final error = decoded['error'];
+    if (error != null) {
+      throw Exception('RPC error: $error');
+    }
+    final result = decoded['result'];
+    if (result == null) return null;
+    if (result is Map<String, dynamic>) {
+      return result;
+    }
+    throw Exception('Formato de transacción desconocido.');
+  }
+
+  List<dynamic>? _extractAccountKeys(Map<String, dynamic>? txResult) {
+    final transaction = txResult?['transaction'];
+    if (transaction is Map<String, dynamic>) {
+      final message = transaction['message'];
+      if (message is Map<String, dynamic>) {
+        final keys = message['accountKeys'];
+        if (keys is List<dynamic>) {
+          return keys;
+        }
+      }
+    }
+    return null;
+  }
+
+  double? _findDynamicBalance(
+    List<dynamic>? balances,
+    String owner,
+    String mint,
+    List<dynamic>? accountKeys,
+  ) {
+    if (balances == null || balances.isEmpty) return null;
+    for (final entry in balances) {
+      if (entry is! Map<String, dynamic>) continue;
+      final entryMint = entry['mint']?.toString();
+      if (entryMint != mint) continue;
+      final rawOwner =
+          entry['owner'] ??
+          _ownerFromAccountIndex(entry['accountIndex'], accountKeys);
+      final entryOwner = rawOwner?.toString();
+      if (entryOwner != owner) continue;
+      return _parseDynamicUiAmount(entry['uiTokenAmount']);
+    }
+    return null;
+  }
+
+  String? _ownerFromAccountIndex(dynamic index, List<dynamic>? accountKeys) {
+    if (accountKeys == null) return null;
+    int? resolved;
+    if (index is int) {
+      resolved = index;
+    } else if (index is num) {
+      resolved = index.toInt();
+    } else if (index != null) {
+      resolved = int.tryParse(index.toString());
+    }
+    if (resolved == null || resolved < 0 || resolved >= accountKeys.length) {
+      return null;
+    }
+    final entry = accountKeys[resolved];
+    if (entry is Map<String, dynamic>) {
+      final pubkey = entry['pubkey'];
+      if (pubkey is String && pubkey.isNotEmpty) {
+        return pubkey;
+      }
+    } else if (entry is String && entry.isNotEmpty) {
+      return entry;
+    }
+    return null;
+  }
+
+  double? _parseDynamicUiAmount(dynamic raw) {
+    if (raw is! Map<String, dynamic>) return null;
+    final uiString = raw['uiAmountString']?.toString();
+    if (uiString != null) {
+      final maybeUi = double.tryParse(uiString);
+      if (maybeUi != null) {
+        return maybeUi;
+      }
+    }
+    final amountString = raw['amount']?.toString();
+    final rawAmount = amountString == null
+        ? null
+        : double.tryParse(amountString);
+    if (rawAmount == null) return null;
+    final decimals = (raw['decimals'] as num?)?.toDouble() ?? 0;
+    return rawAmount / math.pow(10, decimals);
+  }
+
+  double? _computeTokenDelta(double? pre, double? post) {
+    if (post == null) return null;
+    final delta = post - (pre ?? 0);
+    if (delta <= 0) {
+      return null;
+    }
+    return delta;
   }
 
   void dispose() {

@@ -14,5 +14,15 @@ class WalletExecutionService {
 
   Future<void> waitForConfirmation(String signature) async {}
 
+  Future<double?> readTokenAmountFromTransaction({
+    required String signature,
+    required String owner,
+    required String mint,
+  }) async {
+    return null;
+  }
+
+  Future<int> getMintDecimals(String mint) async => 6;
+
   void dispose() {}
 }

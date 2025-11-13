@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../featured_coins/controller/featured_coin_notifier.dart';
 import '../../featured_coins/models/featured_coin.dart';
 import '../controller/auto_invest_notifier.dart';
+import '../models/execution_mode.dart';
 
 class AutoInvestPage extends ConsumerWidget {
   const AutoInvestPage({super.key});
@@ -23,10 +24,7 @@ class AutoInvestPage extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              'Auto Invest',
-              style: theme.textTheme.headlineSmall,
-            ),
+            Text('Auto Invest', style: theme.textTheme.headlineSmall),
             const SizedBox(height: 8),
             Text(
               'Configura los criterios del bot y vincula tu wallet '
@@ -65,10 +63,7 @@ class AutoInvestPage extends ConsumerWidget {
             ),
             if (state.statusMessage != null) ...[
               const SizedBox(height: 12),
-              Text(
-                state.statusMessage!,
-                style: theme.textTheme.bodySmall,
-              ),
+              Text(state.statusMessage!, style: theme.textTheme.bodySmall),
             ],
           ],
         ),
@@ -78,10 +73,7 @@ class AutoInvestPage extends ConsumerWidget {
 }
 
 class _WalletCard extends StatelessWidget {
-  const _WalletCard({
-    required this.state,
-    required this.notifier,
-  });
+  const _WalletCard({required this.state, required this.notifier});
 
   final AutoInvestState state;
   final AutoInvestNotifier notifier;
@@ -121,17 +113,14 @@ class _WalletCard extends StatelessWidget {
                 ],
               )
             else
-              Text(
-                instructions,
-                style: theme.textTheme.bodySmall,
-              ),
+              Text(instructions, style: theme.textTheme.bodySmall),
             const SizedBox(height: 12),
             ElevatedButton.icon(
               onPressed: state.isConnecting
                   ? null
                   : connected
-                      ? notifier.disconnectWallet
-                      : notifier.connectWallet,
+                  ? notifier.disconnectWallet
+                  : notifier.connectWallet,
               icon: Icon(connected ? Icons.link_off : Icons.link),
               label: Text(connected ? 'Disconnect' : 'Connect wallet'),
             ),
@@ -150,6 +139,8 @@ class _BudgetCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final deployed = state.deployedBudgetSol;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -184,8 +175,18 @@ class _BudgetCard extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
+              'Disponible: ${state.availableBudgetSol.toStringAsFixed(2)} SOL · En uso ${deployed.toStringAsFixed(2)} SOL',
+              style: theme.textTheme.bodySmall,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'PnL realizado: ${state.realizedProfitSol.toStringAsFixed(3)} SOL · Retirado ${state.withdrawnProfitSol.toStringAsFixed(3)} SOL',
+              style: theme.textTheme.bodySmall,
+            ),
+            const SizedBox(height: 4),
+            Text(
               'El bot nunca invertirá más que estos límites. Ajusta según tu apetito de riesgo.',
-              style: Theme.of(context).textTheme.bodySmall,
+              style: theme.textTheme.bodySmall,
             ),
           ],
         ),
@@ -208,7 +209,10 @@ class _FilterCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Criterios de mercado', style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              'Criterios de mercado',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
             const SizedBox(height: 12),
             Row(
               children: [
@@ -270,7 +274,10 @@ class _SafetyCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Riesgo y salida', style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              'Riesgo y salida',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
             const SizedBox(height: 12),
             Row(
               children: [
@@ -278,7 +285,9 @@ class _SafetyCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Stop loss (${state.stopLossPercent.toStringAsFixed(0)}%)'),
+                      Text(
+                        'Stop loss (${state.stopLossPercent.toStringAsFixed(0)}%)',
+                      ),
                       Slider(
                         min: 5,
                         max: 90,
@@ -293,7 +302,9 @@ class _SafetyCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Take profit (${state.takeProfitPercent.toStringAsFixed(0)}%)'),
+                      Text(
+                        'Take profit (${state.takeProfitPercent.toStringAsFixed(0)}%)',
+                      ),
                       Slider(
                         min: 10,
                         max: 200,
@@ -311,7 +322,8 @@ class _SafetyCard extends StatelessWidget {
               onChanged: notifier.updateWithdrawOnGain,
               title: const Text('Retirar tras ganancia'),
               subtitle: const Text(
-                  'Si está activo, el bot moverá las utilidades al presupuesto general antes de reinvertir.'),
+                'Si está activo, el bot moverá las utilidades al presupuesto general antes de reinvertir.',
+              ),
             ),
           ],
         ),
@@ -321,10 +333,7 @@ class _SafetyCard extends StatelessWidget {
 }
 
 class _ExecutionModeCard extends StatelessWidget {
-  const _ExecutionModeCard({
-    required this.state,
-    required this.notifier,
-  });
+  const _ExecutionModeCard({required this.state, required this.notifier});
 
   final AutoInvestState state;
   final AutoInvestNotifier notifier;
@@ -342,7 +351,8 @@ class _ExecutionModeCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final usingPumpPortal = state.executionMode == AutoInvestExecutionMode.pumpPortal;
+    final usingPumpPortal =
+        state.executionMode == AutoInvestExecutionMode.pumpPortal;
 
     return Card(
       child: Padding(
@@ -401,10 +411,8 @@ class _ExecutionModeCard extends StatelessWidget {
                 decoration: const InputDecoration(labelText: 'Pool preferido'),
                 items: _poolOptions
                     .map(
-                      (pool) => DropdownMenuItem(
-                        value: pool,
-                        child: Text(pool),
-                      ),
+                      (pool) =>
+                          DropdownMenuItem(value: pool, child: Text(pool)),
                     )
                     .toList(),
                 onChanged: (value) {
@@ -527,9 +535,7 @@ class _NumberFieldState extends State<_NumberField> {
     return TextFormField(
       controller: _controller,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
-      inputFormatters: [
-        FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
-      ],
+      inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]'))],
       decoration: InputDecoration(
         labelText: widget.label,
         suffixText: widget.suffix,

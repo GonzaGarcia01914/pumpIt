@@ -1,0 +1,4 @@
+enum AutoInvestExecutionMode {
+  jupiter,
+  pumpPortal,
+}

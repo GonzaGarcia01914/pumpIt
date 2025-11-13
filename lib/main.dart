@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:pump_it_baby/core/storage/shared_prefs_provider.dart';
 import 'package:pump_it_baby/features/auto_invest/controller/auto_invest_executor.dart';
+import 'package:pump_it_baby/features/auto_invest/controller/position_monitor.dart';
 import 'package:pump_it_baby/features/auto_invest/view/auto_invest_page.dart';
 import 'package:pump_it_baby/features/auto_invest/view/results_page.dart';
 import 'package:pump_it_baby/features/featured_coins/view/featured_coin_page.dart';
@@ -13,9 +14,7 @@ Future<void> main() async {
   final prefs = await SharedPreferences.getInstance();
   runApp(
     ProviderScope(
-      overrides: [
-        sharedPreferencesProvider.overrideWithValue(prefs),
-      ],
+      overrides: [sharedPreferencesProvider.overrideWithValue(prefs)],
       child: const PumpItBabyApp(),
     ),
   );
@@ -47,6 +46,7 @@ class HomeTabsPage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     ref.watch(autoInvestExecutorProvider);
+    ref.watch(autoInvestMonitorProvider);
     return DefaultTabController(
       length: 3,
       child: Scaffold(
