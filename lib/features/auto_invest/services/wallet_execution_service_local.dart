@@ -8,6 +8,8 @@ import 'package:solana_web3/solana_web3.dart' as solana;
 // ignore: implementation_imports
 import 'package:solana_web3/src/crypto/nacl.dart' as nacl;
 
+const _lamportsPerSol = 1000000000;
+
 const _localKeyPath = String.fromEnvironment(
   'LOCAL_KEY_PATH',
   defaultValue: '',
@@ -120,6 +122,16 @@ class WalletExecutionService {
       return decimals;
     } catch (_) {
       return 6;
+    }
+  }
+
+  Future<double?> getWalletBalance(String address) async {
+    try {
+      final pubkey = solana.Pubkey.fromBase58(address);
+      final lamports = await _connection.getBalance(pubkey);
+      return lamports / _lamportsPerSol;
+    } catch (_) {
+      return null;
     }
   }
 

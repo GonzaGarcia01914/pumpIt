@@ -24,5 +24,7 @@ class WalletExecutionService {
 
   Future<int> getMintDecimals(String mint) async => 6;
 
+  Future<double?> getWalletBalance(String address) async => null;
+
   void dispose() {}
 }

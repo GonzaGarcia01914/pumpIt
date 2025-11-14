@@ -16,9 +16,14 @@ class AutoInvestPositionMonitor {
   Timer? _timer;
   bool _tickInProgress = false;
   final Map<String, DateTime> _errorCooldown = {};
+  final Map<String, int> _sellAttempts = {};
+  final Map<String, DateTime> _sellLastAttempt = {};
 
-  static const _interval = Duration(seconds: 45);
+  static const _interval = Duration(seconds: 1);
   static const _errorCooldownDuration = Duration(minutes: 2);
+  static const _sellRetryDelay = Duration(seconds: 3);
+  static const _sellMaxAttempts = 5;
+  static const _sellStuckSince = Duration(seconds: 12);
 
   void init() {
     ref.listen<AutoInvestState>(
@@ -59,11 +64,14 @@ class AutoInvestPositionMonitor {
       _stop();
       return;
     }
+    // Limpia intentos antiguos de posiciones ya cerradas
+    final sigs = positions.map((p) => p.entrySignature).toSet();
+    _sellAttempts.removeWhere((k, v) => !sigs.contains(k));
+    _sellLastAttempt.removeWhere((k, v) => !sigs.contains(k));
     _tickInProgress = true;
     try {
       for (final position in positions) {
         await _updatePosition(position, state);
-        await Future<void>.delayed(const Duration(milliseconds: 200));
       }
     } finally {
       _tickInProgress = false;
@@ -102,33 +110,76 @@ class AutoInvestPositionMonitor {
             updateAlert: alertUpdate != null,
           );
 
-      if (alertUpdate != null) {
-        final percentSnippet = pnlPercent == null
-            ? ''
-            : ' (${pnlPercent.toStringAsFixed(2)}%)';
-        ref
-            .read(autoInvestProvider.notifier)
-            .setStatus(
-              '${alertUpdate.type.label} alcanzado para ${position.symbol}$percentSnippet',
-            );
-        OpenPosition? refreshed;
-        for (final candidate in ref.read(autoInvestProvider).positions) {
-          if (candidate.entrySignature == position.entrySignature) {
-            refreshed = candidate;
-            break;
-          }
-        }
-        if (refreshed != null && !refreshed.isClosing) {
-          unawaited(
-            ref
-                .read(autoInvestExecutorProvider)
-                .sellPosition(refreshed, reason: alertUpdate.type),
-          );
-        }
+      // Intento de venta inicial + reintentos si la alerta está activa
+      final activeAlert =
+          alertUpdate?.type ??
+          ref
+              .read(autoInvestProvider)
+              .positions
+              .firstWhere(
+                (p) => p.entrySignature == position.entrySignature,
+                orElse: () => position,
+              )
+              .alertType;
+      if (activeAlert != null) {
+        await _maybeAttemptSell(position, activeAlert);
       }
     } catch (error) {
       _handleError(position, error);
     }
+  }
+
+  Future<void> _maybeAttemptSell(
+    OpenPosition position,
+    PositionAlertType reason,
+  ) async {
+    // No duplicar mientras está cerrando
+    if (position.isClosing) return;
+    final now = DateTime.now();
+    final last = _sellLastAttempt[position.entrySignature];
+    final attempts = _sellAttempts[position.entrySignature] ?? 0;
+
+    // Si nunca intentamos, o ya pasó el retry delay, o está atascado hace tiempo
+    final triggeredAt = position.alertTriggeredAt;
+    final stuck =
+        triggeredAt != null && now.difference(triggeredAt) >= _sellStuckSince;
+    if (last != null && now.difference(last) < _sellRetryDelay && !stuck) {
+      return;
+    }
+    if (attempts >= _sellMaxAttempts && !stuck) {
+      return;
+    }
+
+    _sellLastAttempt[position.entrySignature] = now;
+    _sellAttempts[position.entrySignature] = attempts + 1;
+
+    // Refresca posición en caso de que haya cambiado flags
+    OpenPosition? refreshed;
+    for (final candidate in ref.read(autoInvestProvider).positions) {
+      if (candidate.entrySignature == position.entrySignature) {
+        refreshed = candidate;
+        break;
+      }
+    }
+    if (refreshed == null || refreshed.isClosing) return;
+
+    // Feedback mínimo la primera vez
+    if (attempts == 0) {
+      final percentSnippet = refreshed.pnlPercent == null
+          ? ''
+          : ' (${refreshed.pnlPercent!.toStringAsFixed(2)}%)';
+      ref
+          .read(autoInvestProvider.notifier)
+          .setStatus(
+            '${reason.label} alcanzado para ${refreshed.symbol}$percentSnippet',
+          );
+    }
+
+    unawaited(
+      ref
+          .read(autoInvestExecutorProvider)
+          .sellPosition(refreshed, reason: reason),
+    );
   }
 
   _AlertUpdate? _evaluateAlert(

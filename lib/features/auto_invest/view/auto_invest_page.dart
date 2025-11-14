@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
 
 import '../../featured_coins/controller/featured_coin_notifier.dart';
 import '../../featured_coins/models/featured_coin.dart';
@@ -85,6 +86,19 @@ class _WalletCard extends StatelessWidget {
     final instructions = kIsWeb
         ? 'Conecta Phantom (Chrome/Edge) y autoriza a la app.'
         : 'Define --dart-define=LOCAL_KEY_PATH=/ruta/auto_bot.json y presiona Conectar.';
+    String balanceLabel() {
+      if (!connected) return instructions;
+      final sol = state.walletBalanceSol;
+      if (sol <= 0) {
+        return 'Balance wallet no disponible.';
+      }
+      final price = state.solPriceUsd;
+      final usd = price > 0 ? ' (\$${(sol * price).toStringAsFixed(2)})' : '';
+      final updated = state.walletBalanceUpdatedAt == null
+          ? ''
+          : ' · ${DateFormat('HH:mm').format(state.walletBalanceUpdatedAt!)}';
+      return 'Balance: ${sol.toStringAsFixed(3)} SOL$usd$updated';
+    }
 
     return Card(
       child: Padding(
@@ -95,21 +109,33 @@ class _WalletCard extends StatelessWidget {
             Text('Wallet', style: theme.textTheme.titleMedium),
             const SizedBox(height: 12),
             if (connected)
-              Row(
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Chip(
-                    avatar: const Icon(Icons.wallet),
-                    label: Text(
-                      state.walletAddress!.length > 12
-                          ? '${state.walletAddress!.substring(0, 6)}...${state.walletAddress!.substring(state.walletAddress!.length - 6)}'
-                          : state.walletAddress!,
-                    ),
+                  Row(
+                    children: [
+                      Chip(
+                        avatar: const Icon(Icons.wallet),
+                        label: Text(
+                          state.walletAddress!.length > 12
+                              ? '${state.walletAddress!.substring(0, 6)}...${state.walletAddress!.substring(state.walletAddress!.length - 6)}'
+                              : state.walletAddress!,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      TextButton(
+                        onPressed: notifier.disconnectWallet,
+                        child: const Text('Desconectar'),
+                      ),
+                      IconButton(
+                        tooltip: 'Actualizar balance',
+                        icon: const Icon(Icons.refresh),
+                        onPressed: notifier.refreshWalletBalance,
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 12),
-                  TextButton(
-                    onPressed: notifier.disconnectWallet,
-                    child: const Text('Desconectar'),
-                  ),
+                  const SizedBox(height: 6),
+                  Text(balanceLabel(), style: theme.textTheme.bodySmall),
                 ],
               )
             else
@@ -141,6 +167,17 @@ class _BudgetCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final deployed = state.deployedBudgetSol;
+    final price = state.solPriceUsd;
+    String usdLabel(double solAmount) {
+      if (price <= 0) return '';
+      final usd = solAmount * price;
+      return ' (\$${usd.toStringAsFixed(2)})';
+    }
+
+    final priceLine = price <= 0
+        ? null
+        : 'SOL ≈ \$${price.toStringAsFixed(2)}'
+              '${state.solPriceUpdatedAt == null ? '' : ' · ${DateFormat('HH:mm').format(state.solPriceUpdatedAt!)}'}';
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -174,19 +211,53 @@ class _BudgetCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                for (final percent in [0.25, 0.5, 0.75, 1.0])
+                  ActionChip(
+                    label: Text('${(percent * 100).toInt()}% wallet'),
+                    onPressed: state.walletBalanceSol <= 0
+                        ? null
+                        : () => notifier.applyTotalBudgetPercent(percent),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
             Text(
-              'Disponible: ${state.availableBudgetSol.toStringAsFixed(2)} SOL · En uso ${deployed.toStringAsFixed(2)} SOL',
+              'Disponible: ${state.availableBudgetSol.toStringAsFixed(2)} SOL${usdLabel(state.availableBudgetSol)} · '
+              'En uso ${deployed.toStringAsFixed(2)} SOL${usdLabel(deployed)}',
               style: theme.textTheme.bodySmall,
             ),
             const SizedBox(height: 4),
             Text(
-              'PnL realizado: ${state.realizedProfitSol.toStringAsFixed(3)} SOL · Retirado ${state.withdrawnProfitSol.toStringAsFixed(3)} SOL',
+              'PnL realizado: ${state.realizedProfitSol.toStringAsFixed(3)} SOL${usdLabel(state.realizedProfitSol)} · '
+              'Retirado ${state.withdrawnProfitSol.toStringAsFixed(3)} SOL${usdLabel(state.withdrawnProfitSol)}',
               style: theme.textTheme.bodySmall,
             ),
+            if (priceLine != null) ...[
+              const SizedBox(height: 4),
+              Text(priceLine, style: theme.textTheme.bodySmall),
+            ],
             const SizedBox(height: 4),
             Text(
               'El bot nunca invertirá más que estos límites. Ajusta según tu apetito de riesgo.',
               style: theme.textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                for (final percent in [1.0, 0.5, 0.2])
+                  ActionChip(
+                    label: Text('${(percent * 100).toInt()}% por memecoin'),
+                    onPressed: state.totalBudgetSol <= 0
+                        ? null
+                        : () => notifier.applyPerCoinPercent(percent),
+                  ),
+              ],
             ),
           ],
         ),

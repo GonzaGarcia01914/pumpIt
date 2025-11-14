@@ -302,6 +302,7 @@ class AutoInvestExecutor {
           signature: signature,
           position: position,
           realizedSol: expectedSol > 0 ? expectedSol : position.entrySol,
+          reason: reason,
         ),
       );
     } catch (error) {
@@ -396,6 +397,7 @@ class AutoInvestExecutor {
       ref
           .read(autoInvestProvider.notifier)
           .setStatus('Orden falló ($symbol): $error');
+      ref.read(autoInvestProvider.notifier).releaseFailedPosition(signature);
     }
   }
 
@@ -403,6 +405,7 @@ class AutoInvestExecutor {
     required String signature,
     required OpenPosition position,
     required double realizedSol,
+    PositionAlertType? reason,
   }) async {
     try {
       await wallet.waitForConfirmation(signature);
@@ -415,6 +418,7 @@ class AutoInvestExecutor {
             position: position,
             sellSignature: signature,
             realizedSol: realizedSol,
+            closeReason: reason,
           );
     } catch (error) {
       ref

@@ -33,12 +33,17 @@ class AutoInvestState {
     required this.analysisSummary,
     required this.executions,
     required this.positions,
+    required this.closedPositions,
     required this.executionMode,
     required this.pumpSlippagePercent,
     required this.pumpPriorityFeeSol,
     required this.pumpPool,
     required this.realizedProfitSol,
     required this.withdrawnProfitSol,
+    required this.walletBalanceSol,
+    this.walletBalanceUpdatedAt,
+    required this.solPriceUsd,
+    this.solPriceUpdatedAt,
     this.statusMessage,
   });
 
@@ -62,12 +67,17 @@ class AutoInvestState {
     analysisSummary: null,
     executions: const [],
     positions: const [],
+    closedPositions: const [],
     executionMode: AutoInvestExecutionMode.jupiter,
     pumpSlippagePercent: 10,
     pumpPriorityFeeSol: 0.001,
     pumpPool: 'pump',
     realizedProfitSol: 0,
     withdrawnProfitSol: 0,
+    walletBalanceSol: 0,
+    walletBalanceUpdatedAt: null,
+    solPriceUsd: 0,
+    solPriceUpdatedAt: null,
   );
 
   final bool isEnabled;
@@ -89,12 +99,17 @@ class AutoInvestState {
   final String? analysisSummary;
   final List<ExecutionRecord> executions;
   final List<OpenPosition> positions;
+  final List<ClosedPosition> closedPositions;
   final AutoInvestExecutionMode executionMode;
   final double pumpSlippagePercent;
   final double pumpPriorityFeeSol;
   final String pumpPool;
   final double realizedProfitSol;
   final double withdrawnProfitSol;
+  final double walletBalanceSol;
+  final DateTime? walletBalanceUpdatedAt;
+  final double solPriceUsd;
+  final DateTime? solPriceUpdatedAt;
   final String? statusMessage;
 
   double get deployedBudgetSol =>
@@ -120,12 +135,17 @@ class AutoInvestState {
     String? analysisSummary,
     List<ExecutionRecord>? executions,
     List<OpenPosition>? positions,
+    List<ClosedPosition>? closedPositions,
     AutoInvestExecutionMode? executionMode,
     double? pumpSlippagePercent,
     double? pumpPriorityFeeSol,
     String? pumpPool,
     double? realizedProfitSol,
     double? withdrawnProfitSol,
+    double? walletBalanceSol,
+    DateTime? walletBalanceUpdatedAt,
+    double? solPriceUsd,
+    DateTime? solPriceUpdatedAt,
     String? statusMessage,
     bool clearMessage = false,
   }) {
@@ -149,12 +169,18 @@ class AutoInvestState {
       analysisSummary: analysisSummary ?? this.analysisSummary,
       executions: executions ?? this.executions,
       positions: positions ?? this.positions,
+      closedPositions: closedPositions ?? this.closedPositions,
       executionMode: executionMode ?? this.executionMode,
       pumpSlippagePercent: pumpSlippagePercent ?? this.pumpSlippagePercent,
       pumpPriorityFeeSol: pumpPriorityFeeSol ?? this.pumpPriorityFeeSol,
       pumpPool: pumpPool ?? this.pumpPool,
       realizedProfitSol: realizedProfitSol ?? this.realizedProfitSol,
       withdrawnProfitSol: withdrawnProfitSol ?? this.withdrawnProfitSol,
+      walletBalanceSol: walletBalanceSol ?? this.walletBalanceSol,
+      walletBalanceUpdatedAt:
+          walletBalanceUpdatedAt ?? this.walletBalanceUpdatedAt,
+      solPriceUsd: solPriceUsd ?? this.solPriceUsd,
+      solPriceUpdatedAt: solPriceUpdatedAt ?? this.solPriceUpdatedAt,
       statusMessage: clearMessage ? null : statusMessage ?? this.statusMessage,
     );
   }
@@ -178,7 +204,14 @@ class AutoInvestState {
     'pumpPool': pumpPool,
     'realizedProfitSol': realizedProfitSol,
     'withdrawnProfitSol': withdrawnProfitSol,
+    'walletBalanceSol': walletBalanceSol,
+    'walletBalanceUpdatedAt': walletBalanceUpdatedAt?.toIso8601String(),
+    'solPriceUsd': solPriceUsd,
+    'solPriceUpdatedAt': solPriceUpdatedAt?.toIso8601String(),
     'positions': positions.map((p) => p.toJson()).toList(growable: false),
+    'closedPositions': closedPositions
+        .map((p) => p.toJson())
+        .toList(growable: false),
   };
 
   static AutoInvestState fromJson(Map<String, dynamic> json) {
@@ -202,6 +235,12 @@ class AutoInvestState {
             .map(OpenPosition.fromJson)
             .toList() ??
         initial.positions;
+    final closedPositions =
+        (json['closedPositions'] as List<dynamic>?)
+            ?.whereType<Map<String, dynamic>>()
+            .map(ClosedPosition.fromJson)
+            .toList() ??
+        initial.closedPositions;
     final deployedFromPositions = positions.fold<double>(
       0,
       (sum, position) => sum + position.entrySol,
@@ -255,6 +294,7 @@ class AutoInvestState {
       ),
       pumpPool: json['pumpPool']?.toString() ?? initial.pumpPool,
       positions: positions,
+      closedPositions: closedPositions,
       realizedProfitSol: readDouble(
         'realizedProfitSol',
         initial.realizedProfitSol,
@@ -263,6 +303,17 @@ class AutoInvestState {
         'withdrawnProfitSol',
         initial.withdrawnProfitSol,
       ),
+      walletBalanceSol: readDouble(
+        'walletBalanceSol',
+        initial.walletBalanceSol,
+      ),
+      walletBalanceUpdatedAt: json['walletBalanceUpdatedAt'] is String
+          ? DateTime.tryParse(json['walletBalanceUpdatedAt'] as String)
+          : null,
+      solPriceUsd: readDouble('solPriceUsd', initial.solPriceUsd),
+      solPriceUpdatedAt: json['solPriceUpdatedAt'] is String
+          ? DateTime.tryParse(json['solPriceUpdatedAt'] as String)
+          : null,
     );
   }
 }
@@ -287,11 +338,16 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     if (savedPositions.isNotEmpty) {
       initial = initial.copyWith(positions: savedPositions);
     }
+    final savedClosedPositions = storage.loadClosedPositions();
+    if (savedClosedPositions.isNotEmpty) {
+      initial = initial.copyWith(closedPositions: savedClosedPositions);
+    }
     final walletAddress = walletService.currentPublicKey;
     if (walletAddress != null) {
       initial = initial.copyWith(walletAddress: walletAddress);
       Future.microtask(() {
         _setState(state.copyWith(walletAddress: walletAddress));
+        refreshWalletBalance();
       });
     }
     return initial;
@@ -345,6 +401,24 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     _setState(state.copyWith(perCoinBudgetSol: value));
   }
 
+  void applyTotalBudgetPercent(double percent) {
+    final balance = state.walletBalanceSol;
+    if (balance <= 0) {
+      setStatus('Balance de wallet no disponible.');
+      return;
+    }
+    updateTotalBudget(balance * percent);
+  }
+
+  void applyPerCoinPercent(double percent) {
+    final total = state.totalBudgetSol;
+    if (total <= 0) {
+      setStatus('Define un presupuesto total antes de ajustar por porcentaje.');
+      return;
+    }
+    updatePerCoinBudget(total * percent);
+  }
+
   void updateWithdrawOnGain(bool value) {
     _setState(state.copyWith(withdrawOnGain: value));
   }
@@ -382,6 +456,32 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     _setState(state.copyWith(statusMessage: message), persist: false);
   }
 
+  void updateSolPrice(double price) {
+    _setState(
+      state.copyWith(solPriceUsd: price, solPriceUpdatedAt: DateTime.now()),
+    );
+  }
+
+  Future<void> refreshWalletBalance() async {
+    final address = state.walletAddress;
+    if (address == null) return;
+    try {
+      final balance = await walletService.getWalletBalance(address);
+      if (balance == null) {
+        setStatus('No se pudo obtener balance de wallet.');
+        return;
+      }
+      _setState(
+        state.copyWith(
+          walletBalanceSol: balance,
+          walletBalanceUpdatedAt: DateTime.now(),
+        ),
+      );
+    } catch (error) {
+      setStatus('Error leyendo balance: $error');
+    }
+  }
+
   Future<void> connectWallet() async {
     if (!walletService.isAvailable) {
       _setState(
@@ -406,6 +506,7 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
           statusMessage: 'Wallet conectada.',
         ),
       );
+      await refreshWalletBalance();
     } catch (error) {
       _setState(
         state.copyWith(
@@ -422,6 +523,8 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     _setState(
       state.copyWith(
         walletAddress: null,
+        walletBalanceSol: 0,
+        walletBalanceUpdatedAt: null,
         statusMessage: 'Wallet desconectada.',
       ),
     );
@@ -552,6 +655,7 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     unawaited(storage.saveState(state));
     unawaited(storage.saveExecutions(state.executions));
     unawaited(storage.savePositions(state.positions));
+    unawaited(storage.saveClosedPositions(state.closedPositions));
   }
 
   void recordExecution(ExecutionRecord record) {
@@ -599,7 +703,12 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     final updated = state.positions
         .map(
           (position) => position.entrySignature == txSignature
-              ? position.copyWith(tokenAmount: tokenAmount)
+              ? position.copyWith(
+                  tokenAmount: tokenAmount,
+                  entryPriceSol: tokenAmount > 0
+                      ? position.entrySol / tokenAmount
+                      : position.entryPriceSol,
+                )
               : position,
         )
         .toList();
@@ -617,10 +726,53 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     _setState(state.copyWith(positions: updated));
   }
 
+  void removePosition(
+    String signature, {
+    bool refundBudget = false,
+    String? message,
+  }) {
+    OpenPosition? removed;
+    final remaining = <OpenPosition>[];
+    for (final position in state.positions) {
+      if (position.entrySignature == signature && removed == null) {
+        removed = position;
+        continue;
+      }
+      remaining.add(position);
+    }
+    if (removed == null) {
+      return;
+    }
+    var available = state.availableBudgetSol;
+    if (refundBudget) {
+      available += removed.entrySol;
+      if (available > state.totalBudgetSol) {
+        available = state.totalBudgetSol;
+      }
+    }
+    var appliedMessage = message;
+    if (appliedMessage == null && refundBudget) {
+      appliedMessage = 'Fondos liberados (${removed.symbol}).';
+    }
+    _setState(
+      state.copyWith(
+        positions: remaining,
+        availableBudgetSol: available,
+        statusMessage: appliedMessage,
+        clearMessage: false,
+      ),
+    );
+  }
+
+  void releaseFailedPosition(String signature) {
+    removePosition(signature, refundBudget: true, message: null);
+  }
+
   void completePositionSale({
     required OpenPosition position,
     required String sellSignature,
     required double realizedSol,
+    PositionAlertType? closeReason,
   }) {
     final entry = position.entrySol;
     final pnl = realizedSol - entry;
@@ -651,9 +803,32 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
       }
       withdrawn += pnl;
     }
+    final tokenAmount = position.tokenAmount ?? 0;
+    final entryPrice =
+        position.entryPriceSol ?? (tokenAmount > 0 ? entry / tokenAmount : 0.0);
+    final exitPrice = tokenAmount > 0 ? realizedSol / tokenAmount : 0.0;
+    final pnlPercent = entry <= 0 ? 0.0 : (pnl / entry) * 100;
+    final closed = ClosedPosition(
+      mint: position.mint,
+      symbol: position.symbol,
+      executionMode: position.executionMode,
+      entrySol: entry,
+      exitSol: realizedSol,
+      tokenAmount: tokenAmount,
+      entryPriceSol: entryPrice,
+      exitPriceSol: exitPrice,
+      pnlSol: pnl,
+      pnlPercent: pnlPercent,
+      openedAt: position.openedAt,
+      closedAt: DateTime.now(),
+      buySignature: position.entrySignature,
+      sellSignature: sellSignature,
+      closeReason: closeReason ?? position.alertType,
+    );
     _setState(
       state.copyWith(
         positions: remaining,
+        closedPositions: [...state.closedPositions, closed],
         totalBudgetSol: nextTotal,
         availableBudgetSol: nextAvailable,
         realizedProfitSol: state.realizedProfitSol + pnl,

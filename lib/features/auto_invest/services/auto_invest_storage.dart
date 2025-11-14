@@ -16,6 +16,7 @@ class AutoInvestStorage {
   static const _stateKey = 'auto_invest_state_v1';
   static const _executionsKey = 'auto_invest_exec_v1';
   static const _positionsKey = 'auto_invest_positions_v1';
+  static const _closedPositionsKey = 'auto_invest_closed_positions_v1';
 
   AutoInvestState? loadState() {
     final raw = _prefs.getString(_stateKey);
@@ -56,6 +57,20 @@ class AutoInvestStorage {
     }
   }
 
+  List<ClosedPosition> loadClosedPositions() {
+    final raw = _prefs.getString(_closedPositionsKey);
+    if (raw == null) return [];
+    try {
+      final list = jsonDecode(raw) as List<dynamic>;
+      return list
+          .whereType<Map<String, dynamic>>()
+          .map(ClosedPosition.fromJson)
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
   Future<void> saveState(AutoInvestState state) async {
     await _prefs.setString(_stateKey, jsonEncode(state.toJson()));
   }
@@ -70,6 +85,13 @@ class AutoInvestStorage {
   Future<void> savePositions(List<OpenPosition> positions) async {
     await _prefs.setString(
       _positionsKey,
+      jsonEncode(positions.map((p) => p.toJson()).toList(growable: false)),
+    );
+  }
+
+  Future<void> saveClosedPositions(List<ClosedPosition> positions) async {
+    await _prefs.setString(
+      _closedPositionsKey,
       jsonEncode(positions.map((p) => p.toJson()).toList(growable: false)),
     );
   }

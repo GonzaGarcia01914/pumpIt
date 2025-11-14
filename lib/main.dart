@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:pump_it_baby/core/storage/shared_prefs_provider.dart';
 import 'package:pump_it_baby/features/auto_invest/controller/auto_invest_executor.dart';
 import 'package:pump_it_baby/features/auto_invest/controller/position_monitor.dart';
+import 'package:pump_it_baby/features/auto_invest/controller/sol_price_ticker.dart';
 import 'package:pump_it_baby/features/auto_invest/view/auto_invest_page.dart';
 import 'package:pump_it_baby/features/auto_invest/view/results_page.dart';
 import 'package:pump_it_baby/features/featured_coins/view/featured_coin_page.dart';
@@ -47,6 +48,7 @@ class HomeTabsPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     ref.watch(autoInvestExecutorProvider);
     ref.watch(autoInvestMonitorProvider);
+    ref.watch(solPriceTickerProvider);
     return DefaultTabController(
       length: 3,
       child: Scaffold(

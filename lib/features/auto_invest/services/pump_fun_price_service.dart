@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
@@ -101,7 +102,7 @@ class PumpFunPriceService {
   PumpFunPriceService({http.Client? client, String? host, Duration? cacheTtl})
     : _client = client ?? http.Client(),
       _host = host ?? 'frontend-api-v3.pump.fun',
-      _cacheTtl = cacheTtl ?? const Duration(seconds: 45);
+      _cacheTtl = cacheTtl ?? const Duration(seconds: 1);
 
   final http.Client _client;
   final String _host;
@@ -123,13 +124,17 @@ class PumpFunPriceService {
     final uri = Uri.https(_host, '/coins/$normalizedMint');
     http.Response response;
     try {
-      response = await _client.get(
-        uri,
-        headers: {
-          'accept': 'application/json',
-          'user-agent': 'pump-it-baby/1.0',
-        },
-      );
+      response = await _client
+          .get(
+            uri,
+            headers: const {
+              'accept': 'application/json',
+              'user-agent': 'pump-it-baby/1.0',
+            },
+          )
+          .timeout(const Duration(milliseconds: 1200));
+    } on TimeoutException catch (_) {
+      throw PumpFunPriceException('Timeout consultando pump.fun');
     } catch (error) {
       throw PumpFunPriceException('No se pudo contactar pump.fun: $error');
     }

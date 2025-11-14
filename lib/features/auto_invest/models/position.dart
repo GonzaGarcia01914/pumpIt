@@ -24,6 +24,7 @@ class OpenPosition extends Equatable {
     required this.openedAt,
     required this.executionMode,
     this.tokenAmount,
+    this.entryPriceSol,
     this.lastPriceSol,
     this.currentValueSol,
     this.pnlSol,
@@ -41,6 +42,7 @@ class OpenPosition extends Equatable {
   final DateTime openedAt;
   final AutoInvestExecutionMode executionMode;
   final double? tokenAmount;
+  final double? entryPriceSol;
   final double? lastPriceSol;
   final double? currentValueSol;
   final double? pnlSol;
@@ -58,6 +60,7 @@ class OpenPosition extends Equatable {
   OpenPosition copyWith({
     double? entrySol,
     Object? tokenAmount = _copySentinel,
+    Object? entryPriceSol = _copySentinel,
     Object? lastPriceSol = _copySentinel,
     Object? currentValueSol = _copySentinel,
     Object? pnlSol = _copySentinel,
@@ -77,6 +80,9 @@ class OpenPosition extends Equatable {
       tokenAmount: identical(tokenAmount, _copySentinel)
           ? this.tokenAmount
           : tokenAmount as double?,
+      entryPriceSol: identical(entryPriceSol, _copySentinel)
+          ? this.entryPriceSol
+          : entryPriceSol as double?,
       lastPriceSol: identical(lastPriceSol, _copySentinel)
           ? this.lastPriceSol
           : lastPriceSol as double?,
@@ -112,6 +118,7 @@ class OpenPosition extends Equatable {
     'openedAt': openedAt.toIso8601String(),
     'executionMode': executionMode.name,
     'tokenAmount': tokenAmount,
+    'entryPriceSol': entryPriceSol,
     'lastPriceSol': lastPriceSol,
     'currentValueSol': currentValueSol,
     'pnlSol': pnlSol,
@@ -151,6 +158,7 @@ class OpenPosition extends Equatable {
         orElse: () => AutoInvestExecutionMode.jupiter,
       ),
       tokenAmount: (json['tokenAmount'] as num?)?.toDouble(),
+      entryPriceSol: (json['entryPriceSol'] as num?)?.toDouble(),
       lastPriceSol: (json['lastPriceSol'] as num?)?.toDouble(),
       currentValueSol: (json['currentValueSol'] as num?)?.toDouble(),
       pnlSol: (json['pnlSol'] as num?)?.toDouble(),
@@ -171,6 +179,7 @@ class OpenPosition extends Equatable {
     openedAt,
     executionMode,
     tokenAmount,
+    entryPriceSol,
     lastPriceSol,
     currentValueSol,
     pnlSol,
@@ -179,5 +188,119 @@ class OpenPosition extends Equatable {
     alertType,
     alertTriggeredAt,
     isClosing,
+  ];
+}
+
+class ClosedPosition extends Equatable {
+  const ClosedPosition({
+    required this.mint,
+    required this.symbol,
+    required this.executionMode,
+    required this.entrySol,
+    required this.exitSol,
+    required this.tokenAmount,
+    required this.entryPriceSol,
+    required this.exitPriceSol,
+    required this.pnlSol,
+    required this.pnlPercent,
+    required this.openedAt,
+    required this.closedAt,
+    required this.buySignature,
+    required this.sellSignature,
+    this.closeReason,
+  });
+
+  final String mint;
+  final String symbol;
+  final AutoInvestExecutionMode executionMode;
+  final double entrySol;
+  final double exitSol;
+  final double tokenAmount;
+  final double entryPriceSol;
+  final double exitPriceSol;
+  final double pnlSol;
+  final double pnlPercent;
+  final DateTime openedAt;
+  final DateTime closedAt;
+  final String buySignature;
+  final String sellSignature;
+  final PositionAlertType? closeReason;
+
+  Map<String, dynamic> toJson() => {
+    'mint': mint,
+    'symbol': symbol,
+    'executionMode': executionMode.name,
+    'entrySol': entrySol,
+    'exitSol': exitSol,
+    'tokenAmount': tokenAmount,
+    'entryPriceSol': entryPriceSol,
+    'exitPriceSol': exitPriceSol,
+    'pnlSol': pnlSol,
+    'pnlPercent': pnlPercent,
+    'openedAt': openedAt.toIso8601String(),
+    'closedAt': closedAt.toIso8601String(),
+    'buySignature': buySignature,
+    'sellSignature': sellSignature,
+    'closeReason': closeReason?.name,
+  };
+
+  factory ClosedPosition.fromJson(Map<String, dynamic> json) {
+    PositionAlertType? alertFromJson(dynamic raw) {
+      final name = raw?.toString();
+      if (name == null) return null;
+      try {
+        return PositionAlertType.values.firstWhere((type) => type.name == name);
+      } catch (_) {
+        return null;
+      }
+    }
+
+    DateTime parseDate(dynamic value) {
+      if (value is String) {
+        return DateTime.tryParse(value) ??
+            DateTime.fromMillisecondsSinceEpoch(0);
+      }
+      return DateTime.fromMillisecondsSinceEpoch(0);
+    }
+
+    return ClosedPosition(
+      mint: json['mint']?.toString() ?? '',
+      symbol: json['symbol']?.toString() ?? '',
+      executionMode: AutoInvestExecutionMode.values.firstWhere(
+        (mode) => mode.name == json['executionMode'],
+        orElse: () => AutoInvestExecutionMode.jupiter,
+      ),
+      entrySol: (json['entrySol'] as num?)?.toDouble() ?? 0,
+      exitSol: (json['exitSol'] as num?)?.toDouble() ?? 0,
+      tokenAmount: (json['tokenAmount'] as num?)?.toDouble() ?? 0,
+      entryPriceSol: (json['entryPriceSol'] as num?)?.toDouble() ?? 0,
+      exitPriceSol: (json['exitPriceSol'] as num?)?.toDouble() ?? 0,
+      pnlSol: (json['pnlSol'] as num?)?.toDouble() ?? 0,
+      pnlPercent: (json['pnlPercent'] as num?)?.toDouble() ?? 0,
+      openedAt: parseDate(json['openedAt']),
+      closedAt: parseDate(json['closedAt']),
+      buySignature: json['buySignature']?.toString() ?? '',
+      sellSignature: json['sellSignature']?.toString() ?? '',
+      closeReason: alertFromJson(json['closeReason']),
+    );
+  }
+
+  @override
+  List<Object?> get props => [
+    mint,
+    symbol,
+    executionMode,
+    entrySol,
+    exitSol,
+    tokenAmount,
+    entryPriceSol,
+    exitPriceSol,
+    pnlSol,
+    pnlPercent,
+    openedAt,
+    closedAt,
+    buySignature,
+    sellSignature,
+    closeReason,
   ];
 }
