@@ -39,6 +39,13 @@ class AutoInvestState {
     required this.pumpPool,
     required this.realizedProfitSol,
     required this.withdrawnProfitSol,
+    required this.walletBalanceSol,
+    required this.solPriceUsd,
+    required this.syncBudgetToWallet,
+    required this.walletBudgetPercent,
+    required this.perCoinPercentOfTotal,
+    this.walletBalanceUpdatedAt,
+    this.solPriceUpdatedAt,
     this.statusMessage,
   });
 
@@ -68,6 +75,13 @@ class AutoInvestState {
     pumpPool: 'pump',
     realizedProfitSol: 0,
     withdrawnProfitSol: 0,
+    walletBalanceSol: 0,
+    solPriceUsd: 0,
+    syncBudgetToWallet: false,
+    walletBudgetPercent: 0.5,
+    perCoinPercentOfTotal: 0.1,
+    walletBalanceUpdatedAt: null,
+    solPriceUpdatedAt: null,
   );
 
   final bool isEnabled;
@@ -95,6 +109,13 @@ class AutoInvestState {
   final String pumpPool;
   final double realizedProfitSol;
   final double withdrawnProfitSol;
+  final double walletBalanceSol;
+  final double solPriceUsd;
+  final bool syncBudgetToWallet;
+  final double walletBudgetPercent;
+  final double perCoinPercentOfTotal;
+  final DateTime? walletBalanceUpdatedAt;
+  final DateTime? solPriceUpdatedAt;
   final String? statusMessage;
 
   double get deployedBudgetSol =>
@@ -126,6 +147,13 @@ class AutoInvestState {
     String? pumpPool,
     double? realizedProfitSol,
     double? withdrawnProfitSol,
+    double? walletBalanceSol,
+    double? solPriceUsd,
+    bool? syncBudgetToWallet,
+    double? walletBudgetPercent,
+    double? perCoinPercentOfTotal,
+    DateTime? walletBalanceUpdatedAt,
+    DateTime? solPriceUpdatedAt,
     String? statusMessage,
     bool clearMessage = false,
   }) {
@@ -155,6 +183,15 @@ class AutoInvestState {
       pumpPool: pumpPool ?? this.pumpPool,
       realizedProfitSol: realizedProfitSol ?? this.realizedProfitSol,
       withdrawnProfitSol: withdrawnProfitSol ?? this.withdrawnProfitSol,
+      walletBalanceSol: walletBalanceSol ?? this.walletBalanceSol,
+      solPriceUsd: solPriceUsd ?? this.solPriceUsd,
+      syncBudgetToWallet: syncBudgetToWallet ?? this.syncBudgetToWallet,
+      walletBudgetPercent: walletBudgetPercent ?? this.walletBudgetPercent,
+      perCoinPercentOfTotal:
+          perCoinPercentOfTotal ?? this.perCoinPercentOfTotal,
+      walletBalanceUpdatedAt:
+          walletBalanceUpdatedAt ?? this.walletBalanceUpdatedAt,
+      solPriceUpdatedAt: solPriceUpdatedAt ?? this.solPriceUpdatedAt,
       statusMessage: clearMessage ? null : statusMessage ?? this.statusMessage,
     );
   }
@@ -178,6 +215,13 @@ class AutoInvestState {
     'pumpPool': pumpPool,
     'realizedProfitSol': realizedProfitSol,
     'withdrawnProfitSol': withdrawnProfitSol,
+    'walletBalanceSol': walletBalanceSol,
+    'solPriceUsd': solPriceUsd,
+    'syncBudgetToWallet': syncBudgetToWallet,
+    'walletBudgetPercent': walletBudgetPercent,
+    'perCoinPercentOfTotal': perCoinPercentOfTotal,
+    'walletBalanceUpdatedAt': walletBalanceUpdatedAt?.toIso8601String(),
+    'solPriceUpdatedAt': solPriceUpdatedAt?.toIso8601String(),
     'positions': positions.map((p) => p.toJson()).toList(growable: false),
   };
 
@@ -217,6 +261,13 @@ class AutoInvestState {
     final availableBudget = availableBudgetRaw == null
         ? derivedAvailable
         : readDouble('availableBudgetSol', totalBudget);
+
+    DateTime? parseDate(dynamic raw) {
+      if (raw is String) {
+        return DateTime.tryParse(raw);
+      }
+      return null;
+    }
 
     return AutoInvestState(
       isEnabled: json['isEnabled'] as bool? ?? initial.isEnabled,
@@ -263,6 +314,18 @@ class AutoInvestState {
         'withdrawnProfitSol',
         initial.withdrawnProfitSol,
       ),
+      walletBalanceSol: readDouble('walletBalanceSol', initial.walletBalanceSol),
+      solPriceUsd: readDouble('solPriceUsd', initial.solPriceUsd),
+      syncBudgetToWallet:
+          json['syncBudgetToWallet'] as bool? ?? initial.syncBudgetToWallet,
+      walletBudgetPercent:
+          readDouble('walletBudgetPercent', initial.walletBudgetPercent),
+      perCoinPercentOfTotal: readDouble(
+          'perCoinPercentOfTotal', initial.perCoinPercentOfTotal),
+      walletBalanceUpdatedAt:
+          parseDate(json['walletBalanceUpdatedAt']) ?? initial.walletBalanceUpdatedAt,
+      solPriceUpdatedAt:
+          parseDate(json['solPriceUpdatedAt']) ?? initial.solPriceUpdatedAt,
     );
   }
 }
@@ -378,6 +441,122 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     _setState(state.copyWith(pumpPool: value, clearMessage: true));
   }
 
+  Future<void> refreshWalletBalance() async {
+    final address = state.walletAddress;
+    if (address == null || address.isEmpty) {
+      _setState(
+        state.copyWith(statusMessage: 'Conecta tu wallet para sincronizar.'),
+        persist: false,
+      );
+      return;
+    }
+    try {
+      final balance = await walletService.getWalletBalance(address);
+      if (balance == null) {
+        _setState(
+          state.copyWith(
+            statusMessage: 'No se pudo leer el saldo de la wallet.',
+          ),
+          persist: false,
+        );
+        return;
+      }
+      var next = state.copyWith(
+        walletBalanceSol: balance,
+        walletBalanceUpdatedAt: DateTime.now(),
+        clearMessage: true,
+      );
+      if (next.syncBudgetToWallet) {
+        // Ajustar presupuestos a porcentaje del saldo de wallet
+        final deployed = next.deployedBudgetSol;
+        final totalFromWallet = (balance * next.walletBudgetPercent)
+            .clamp(0, double.infinity)
+            .toDouble();
+        var available = totalFromWallet - deployed;
+        if (available < 0) available = 0;
+        if (available > totalFromWallet) available = totalFromWallet;
+        next = next.copyWith(
+          totalBudgetSol: totalFromWallet,
+          availableBudgetSol: available,
+          perCoinBudgetSol: (totalFromWallet * next.perCoinPercentOfTotal)
+              .clamp(0, totalFromWallet)
+              .toDouble(),
+        );
+      }
+      _setState(next);
+    } catch (e) {
+      _setState(
+        state.copyWith(statusMessage: 'Error leyendo saldo: $e'),
+        persist: false,
+      );
+    }
+  }
+
+  void updateSolPrice(double price) {
+    if (price <= 0) return;
+    _setState(
+      state.copyWith(solPriceUsd: price, solPriceUpdatedAt: DateTime.now()),
+      persist: false,
+    );
+  }
+
+  void toggleAutoBudgetSync(bool value) {
+    var next = state.copyWith(syncBudgetToWallet: value, clearMessage: true);
+    if (value && next.walletBalanceSol > 0) {
+      final deployed = next.deployedBudgetSol;
+      final totalFromWallet = (next.walletBalanceSol * next.walletBudgetPercent)
+          .clamp(0, double.infinity)
+          .toDouble();
+      var available = totalFromWallet - deployed;
+      if (available < 0) available = 0;
+      if (available > totalFromWallet) available = totalFromWallet;
+      next = next.copyWith(
+        totalBudgetSol: totalFromWallet,
+        availableBudgetSol: available,
+        perCoinBudgetSol:
+            (totalFromWallet * next.perCoinPercentOfTotal).toDouble(),
+      );
+    }
+    _setState(next);
+  }
+
+  void setAutoBudgetPercent(double percent) {
+    final p = percent.clamp(0.0, 1.0).toDouble();
+    var next = state.copyWith(walletBudgetPercent: p, clearMessage: true);
+    if (next.syncBudgetToWallet && next.walletBalanceSol > 0) {
+      final deployed = next.deployedBudgetSol;
+      final totalFromWallet = (next.walletBalanceSol * p).toDouble();
+      var available = totalFromWallet - deployed;
+      if (available < 0) available = 0;
+      if (available > totalFromWallet) available = totalFromWallet;
+      next = next.copyWith(
+        totalBudgetSol: totalFromWallet,
+        availableBudgetSol: available,
+      );
+    }
+    _setState(next);
+  }
+
+  void setAutoPerCoinPercent(double percent) {
+    final p = percent.clamp(0.0, 1.0).toDouble();
+    var next = state.copyWith(perCoinPercentOfTotal: p, clearMessage: true);
+    if (next.syncBudgetToWallet) {
+      next = next.copyWith(
+        perCoinBudgetSol: (next.totalBudgetSol * p).toDouble(),
+      );
+    }
+    _setState(next);
+  }
+
+  void applyTotalBudgetPercent(double percent) {
+    if (state.walletBalanceSol <= 0) return;
+    updateTotalBudget((state.walletBalanceSol * percent).toDouble());
+  }
+
+  void applyPerCoinPercent(double percent) {
+    updatePerCoinBudget((state.totalBudgetSol * percent).toDouble());
+  }
+
   void setStatus(String message) {
     _setState(state.copyWith(statusMessage: message), persist: false);
   }
@@ -406,6 +585,8 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
           statusMessage: 'Wallet conectada.',
         ),
       );
+      // Intentar leer saldo inmediatamente si hay soporte
+      unawaited(refreshWalletBalance());
     } catch (error) {
       _setState(
         state.copyWith(
