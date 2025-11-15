@@ -9,7 +9,7 @@ import 'features/auto_invest/controller/auto_invest_notifier.dart';
 import 'features/auto_invest/controller/position_monitor.dart';
 import 'features/auto_invest/controller/sol_price_ticker.dart';
 import 'features/auto_invest/models/position.dart';
-import 'features/auto_invest/view/auto_invest_page.dart';
+import 'package:pump_it_baby/features/auto_invest/view/auto_invest_page.dart';
 import 'features/auto_invest/view/results_page.dart';
 import 'features/featured_coins/view/featured_coin_page.dart';
 
@@ -116,7 +116,7 @@ class HomeTabsPage extends ConsumerWidget {
                       ),
                     ),
                     const SizedBox(height: 16),
-                    const Expanded(
+                    Expanded(
                       child: TabBarView(
                         physics: BouncingScrollPhysics(),
                         children: [

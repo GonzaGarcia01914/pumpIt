@@ -67,32 +67,95 @@ class AppTheme {
         ),
       ),
       filledButtonTheme: FilledButtonThemeData(
-        style: FilledButton.styleFrom(
-          backgroundColor: _primary,
-          foregroundColor: Colors.black,
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-          textStyle: const TextStyle(fontWeight: FontWeight.w600),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(24),
-          ),
-        ),
+        style:
+            FilledButton.styleFrom(
+              backgroundColor: _primary,
+              foregroundColor: Colors.black,
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              textStyle: const TextStyle(fontWeight: FontWeight.w600),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(24),
+              ),
+            ).copyWith(
+              overlayColor: _hoverOverlay(Colors.white),
+              shadowColor: _hoverShadow(_primary),
+              elevation: _hoverElevation(rest: 0, hovered: 10, pressed: 4),
+            ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
-        style: OutlinedButton.styleFrom(
-          foregroundColor: Colors.white,
-          side: BorderSide(color: Colors.white.withValues(alpha: 0.25)),
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(24),
-          ),
-        ),
+        style:
+            OutlinedButton.styleFrom(
+              foregroundColor: Colors.white,
+              side: BorderSide(color: Colors.white.withValues(alpha: 0.25)),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(24),
+              ),
+            ).copyWith(
+              side: _outlinedSide(
+                base: Colors.white.withValues(alpha: 0.25),
+                hover: _primary.withValues(alpha: 0.8),
+              ),
+              overlayColor: _hoverOverlay(_primary),
+              backgroundColor: _backgroundTint(
+                rest: Colors.transparent,
+                hover: Colors.white.withValues(alpha: 0.05),
+                pressed: Colors.white.withValues(alpha: 0.08),
+                disabled: Colors.white.withValues(alpha: 0.02),
+              ),
+              shadowColor: _hoverShadow(
+                _secondary,
+                restAlpha: 0.1,
+                hoverAlpha: 0.35,
+              ),
+              elevation: _hoverElevation(rest: 0, hovered: 6, pressed: 2),
+            ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style:
+            TextButton.styleFrom(
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(22),
+              ),
+            ).copyWith(
+              overlayColor: _hoverOverlay(Colors.white),
+              backgroundColor: _backgroundTint(
+                rest: Colors.transparent,
+                hover: Colors.white.withValues(alpha: 0.05),
+                pressed: Colors.white.withValues(alpha: 0.1),
+                disabled: Colors.white.withValues(alpha: 0.02),
+              ),
+              shadowColor: _hoverShadow(
+                _secondary,
+                restAlpha: 0,
+                hoverAlpha: 0.25,
+              ),
+              elevation: _hoverElevation(rest: 0, hovered: 4, pressed: 2),
+            ),
       ),
       iconButtonTheme: IconButtonThemeData(
-        style: IconButton.styleFrom(
-          backgroundColor: Colors.white.withValues(alpha: 0.08),
-          foregroundColor: Colors.white,
-          shape: const CircleBorder(),
-        ),
+        style:
+            IconButton.styleFrom(
+              backgroundColor: Colors.white.withValues(alpha: 0.08),
+              foregroundColor: Colors.white,
+              shape: const CircleBorder(),
+            ).copyWith(
+              backgroundColor: _backgroundTint(
+                rest: Colors.white.withValues(alpha: 0.08),
+                hover: Colors.white.withValues(alpha: 0.14),
+                pressed: Colors.white.withValues(alpha: 0.2),
+                disabled: Colors.white.withValues(alpha: 0.04),
+              ),
+              overlayColor: _hoverOverlay(Colors.white),
+              shadowColor: _hoverShadow(
+                _secondary,
+                restAlpha: 0.1,
+                hoverAlpha: 0.4,
+              ),
+              elevation: _hoverElevation(rest: 0, hovered: 10, pressed: 6),
+            ),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
@@ -179,5 +242,94 @@ class AppTheme {
         showValueIndicator: ShowValueIndicator.onDrag,
       ),
     );
+  }
+
+  static WidgetStateProperty<Color?> _hoverOverlay(Color color) {
+    return WidgetStateProperty.resolveWith((states) {
+      if (states.contains(WidgetState.disabled)) {
+        return Colors.transparent;
+      }
+      if (states.contains(WidgetState.pressed)) {
+        return color.withValues(alpha: 0.22);
+      }
+      if (states.contains(WidgetState.hovered)) {
+        return color.withValues(alpha: 0.12);
+      }
+      return null;
+    });
+  }
+
+  static WidgetStateProperty<Color?> _hoverShadow(
+    Color base, {
+    double restAlpha = 0.25,
+    double hoverAlpha = 0.45,
+    double pressedAlpha = 0.35,
+  }) {
+    return WidgetStateProperty.resolveWith((states) {
+      if (states.contains(WidgetState.disabled)) {
+        return Colors.transparent;
+      }
+      if (states.contains(WidgetState.pressed)) {
+        return base.withValues(alpha: pressedAlpha);
+      }
+      if (states.contains(WidgetState.hovered)) {
+        return base.withValues(alpha: hoverAlpha);
+      }
+      return base.withValues(alpha: restAlpha);
+    });
+  }
+
+  static WidgetStateProperty<double?> _hoverElevation({
+    double rest = 0,
+    double hovered = 6,
+    double pressed = 2,
+  }) {
+    return WidgetStateProperty.resolveWith((states) {
+      if (states.contains(WidgetState.disabled)) {
+        return 0;
+      }
+      if (states.contains(WidgetState.pressed)) {
+        return pressed;
+      }
+      if (states.contains(WidgetState.hovered)) {
+        return hovered;
+      }
+      return rest;
+    });
+  }
+
+  static WidgetStateProperty<BorderSide?> _outlinedSide({
+    required Color base,
+    required Color hover,
+  }) {
+    return WidgetStateProperty.resolveWith((states) {
+      if (states.contains(WidgetState.disabled)) {
+        return BorderSide(color: Colors.white.withValues(alpha: 0.1));
+      }
+      if (states.contains(WidgetState.hovered)) {
+        return BorderSide(color: hover, width: 1.4);
+      }
+      return BorderSide(color: base);
+    });
+  }
+
+  static WidgetStateProperty<Color?> _backgroundTint({
+    Color? rest,
+    Color? hover,
+    Color? pressed,
+    Color? disabled,
+  }) {
+    return WidgetStateProperty.resolveWith((states) {
+      if (states.contains(WidgetState.disabled)) {
+        return disabled;
+      }
+      if (states.contains(WidgetState.pressed)) {
+        return pressed ?? hover ?? rest;
+      }
+      if (states.contains(WidgetState.hovered)) {
+        return hover ?? rest;
+      }
+      return rest;
+    });
   }
 }

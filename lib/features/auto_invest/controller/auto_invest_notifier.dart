@@ -877,6 +877,7 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     required OpenPosition position,
     required String sellSignature,
     required double realizedSol,
+    double? exitFeeSol,
   }) {
     final entry = position.entrySol;
     final pnl = realizedSol - entry;
@@ -915,8 +916,10 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     final inferredExitPrice = tokenAmount > 0
         ? (realizedSol / tokenAmount)
         : (position.lastPriceSol ?? 0);
-    final netPnl = (position.entryFeeSol != null && position.exitFeeSol != null)
-        ? (pnl - (position.entryFeeSol ?? 0) - (position.exitFeeSol ?? 0))
+    final exitFee = exitFeeSol ?? position.exitFeeSol;
+    final entryFee = position.entryFeeSol;
+    final netPnl = (entryFee != null && exitFee != null)
+        ? (pnl - (entryFee) - (exitFee))
         : null;
     final closed = ClosedPosition(
       mint: position.mint,
@@ -934,8 +937,8 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
       buySignature: position.entrySignature,
       sellSignature: sellSignature,
       closeReason: position.alertType,
-      entryFeeSol: position.entryFeeSol,
-      exitFeeSol: position.exitFeeSol,
+      entryFeeSol: entryFee,
+      exitFeeSol: exitFee,
       netPnlSol: netPnl,
     );
     final newClosed = [...state.closedPositions, closed];

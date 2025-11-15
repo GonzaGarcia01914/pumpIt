@@ -1,4 +1,4 @@
-﻿import 'dart:math' as math;
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -87,8 +87,7 @@ class _SimulationResultsPageState extends ConsumerState<SimulationResultsPage> {
                 onRemove: () => notifier.removePosition(
                   position.entrySignature,
                   refundBudget: true,
-                  message:
-                      'Posición ${position.symbol} eliminada manualmente.',
+                  message: 'Posición ${position.symbol} eliminada manualmente.',
                 ),
               ),
             ),
@@ -1031,16 +1030,51 @@ class _CircleIconButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final baseColor = theme.colorScheme.surfaceContainerHighest.withValues(
+      alpha: 0.4,
+    );
+    final glow = theme.colorScheme.primary;
+    final style =
+        IconButton.styleFrom(
+          backgroundColor: baseColor,
+          shape: const CircleBorder(),
+        ).copyWith(
+          backgroundColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.disabled)) {
+              return baseColor.withValues(alpha: 0.2);
+            }
+            if (states.contains(WidgetState.pressed)) {
+              return baseColor.withValues(alpha: 0.65);
+            }
+            if (states.contains(WidgetState.hovered)) {
+              return baseColor.withValues(alpha: 0.5);
+            }
+            return baseColor;
+          }),
+          shadowColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.disabled)) {
+              return Colors.transparent;
+            }
+            if (states.contains(WidgetState.pressed)) {
+              return glow.withValues(alpha: 0.55);
+            }
+            if (states.contains(WidgetState.hovered)) {
+              return glow.withValues(alpha: 0.4);
+            }
+            return glow.withValues(alpha: 0.25);
+          }),
+          elevation: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.disabled)) return 0;
+            if (states.contains(WidgetState.pressed)) return 5;
+            if (states.contains(WidgetState.hovered)) return 9;
+            return 0;
+          }),
+        );
     return IconButton(
       tooltip: tooltip,
       icon: Icon(icon, size: 18),
       onPressed: onPressed,
-      style: IconButton.styleFrom(
-        backgroundColor: theme.colorScheme.surfaceContainerHighest.withValues(
-          alpha: 0.4,
-        ),
-        shape: const CircleBorder(),
-      ),
+      style: style,
     );
   }
 }
@@ -1100,4 +1134,3 @@ class _SimulationRunTile extends StatelessWidget {
     );
   }
 }
-

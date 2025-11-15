@@ -289,6 +289,11 @@ class AutoInvestExecutor {
     notifier.setPositionClosing(position.entrySignature, true);
 
     try {
+      final autoState = ref.read(autoInvestProvider);
+      final walletAddress = autoState.walletAddress;
+      final preBalance = walletAddress == null
+          ? null
+          : await wallet.getWalletBalance(walletAddress);
       final quote = await priceService.fetchQuote(position.mint);
       final expectedSol = tokenAmount * quote.priceSol;
       final signature = switch (position.executionMode) {
@@ -334,6 +339,7 @@ class AutoInvestExecutor {
           signature: signature,
           position: position,
           realizedSol: expectedSol > 0 ? expectedSol : position.entrySol,
+          preBalanceSol: preBalance,
         ),
       );
     } catch (error) {
@@ -435,18 +441,30 @@ class AutoInvestExecutor {
     required String signature,
     required OpenPosition position,
     required double realizedSol,
+    double? preBalanceSol,
   }) async {
     try {
       await wallet.waitForConfirmation(signature);
       ref
           .read(autoInvestProvider.notifier)
           .updateExecutionStatus(signature, status: 'confirmed');
+      double? exitFeeSol;
+      final owner = ref.read(autoInvestProvider).walletAddress;
+      if (owner != null && preBalanceSol != null) {
+        final post = await wallet.getWalletBalance(owner);
+        if (post != null) {
+          final actualDelta = post - preBalanceSol;
+          final expectedDelta = realizedSol;
+          exitFeeSol = (expectedDelta - actualDelta).abs();
+        }
+      }
       ref
           .read(autoInvestProvider.notifier)
           .completePositionSale(
             position: position,
             sellSignature: signature,
             realizedSol: realizedSol,
+            exitFeeSol: exitFeeSol,
           );
       // Registro de auditoría confirmado con PnL cuando sea posible
       final pnl = realizedSol - position.entrySol;

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
+import '../../../core/widgets/hover_glow.dart';
 import '../../../core/widgets/soft_surface.dart';
 import '../controller/featured_coin_notifier.dart';
 import '../models/ai_insight.dart';
@@ -37,18 +38,12 @@ class _FeaturedHeader extends StatelessWidget {
           spacing: 12,
           runSpacing: 8,
           children: [
-            _MetricBadge(
-              label: 'Listado',
-              value: '${state.coins.length}',
-            ),
+            _MetricBadge(label: 'Listado', value: '${state.coins.length}'),
             _MetricBadge(
               label: 'Min MC',
               value: '${_compactUsd.format(state.minUsdMarketCap)}+',
             ),
-            _MetricBadge(
-              label: 'Última sync',
-              value: lastUpdated,
-            ),
+            _MetricBadge(label: 'Última sync', value: lastUpdated),
           ],
         ),
       ],
@@ -84,8 +79,7 @@ class _MetricBadge extends StatelessWidget {
           const SizedBox(width: 6),
           Text(
             label,
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: Colors.white70),
+            style: theme.textTheme.bodySmall?.copyWith(color: Colors.white70),
           ),
         ],
       ),
@@ -139,8 +133,9 @@ class FeaturedCoinTab extends ConsumerWidget {
                     ),
                   ),
                   FilledButton.icon(
-                    onPressed:
-                        state.isFetching ? null : () => notifier.refresh(),
+                    onPressed: state.isFetching
+                        ? null
+                        : () => notifier.refresh(),
                     icon: state.isFetching
                         ? const SizedBox(
                             width: 16,
@@ -148,7 +143,9 @@ class FeaturedCoinTab extends ConsumerWidget {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.refresh),
-                    label: Text(state.isFetching ? 'Actualizando...' : 'Refrescar'),
+                    label: Text(
+                      state.isFetching ? 'Actualizando...' : 'Refrescar',
+                    ),
                   ),
                 ],
               ),
@@ -339,6 +336,7 @@ class _FiltersPanelState extends State<_FiltersPanel> {
 
     return SoftSurface(
       color: Theme.of(context).colorScheme.surface,
+      padding: const EdgeInsets.fromLTRB(28, 24, 28, 28),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -379,19 +377,28 @@ class _FiltersPanelState extends State<_FiltersPanel> {
                     child: Wrap(
                       spacing: 8,
                       runSpacing: 8,
-                      children: FeaturedSortOption.values
-                          .map(
-                            (option) => ChoiceChip(
-                              selected: _sortOption == option,
-                              label: Text(_labelForOption(option)),
-                              onSelected: (_) {
-                                setState(() {
-                                  _sortOption = option;
-                                });
-                              },
-                            ),
-                          )
-                          .toList(),
+                      children: FeaturedSortOption.values.map((option) {
+                        final isSelected = _sortOption == option;
+                        final glowBase = isSelected
+                            ? theme.colorScheme.primary
+                            : Colors.white;
+                        return HoverGlow(
+                          borderRadius: BorderRadius.circular(20),
+                          glowColor: glowBase.withValues(
+                            alpha: isSelected ? 0.35 : 0.2,
+                          ),
+                          blurRadius: 26,
+                          child: ChoiceChip(
+                            selected: isSelected,
+                            label: Text(_labelForOption(option)),
+                            onSelected: (_) {
+                              setState(() {
+                                _sortOption = option;
+                              });
+                            },
+                          ),
+                        );
+                      }).toList(),
                     ),
                   ),
                   Wrap(
