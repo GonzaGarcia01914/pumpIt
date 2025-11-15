@@ -86,7 +86,7 @@ class _BudgetSection extends StatelessWidget {
           const _SectionHeader(
             icon: Icons.savings_outlined,
             title: 'Presupuestos (SOL)',
-            subtitle: 'Define lÃ­mites globales y por token',
+            subtitle: 'Define límites globales y por token',
           ),
           const SizedBox(height: 18),
           _BudgetProgressBar(
@@ -137,7 +137,7 @@ class _BudgetSection extends StatelessWidget {
                 onChanged: notifier.updateTotalBudget,
               ),
               _NumberField(
-                label: 'MÃ¡ximo por memecoin',
+                label: 'Máximo por memecoin',
                 value: state.perCoinBudgetSol,
                 suffix: 'SOL',
                 onChanged: notifier.updatePerCoinBudget,
@@ -146,17 +146,17 @@ class _BudgetSection extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Text(
-            'Disponible: ${state.availableBudgetSol.toStringAsFixed(2)} SOL Â· En uso ${deployed.toStringAsFixed(2)} SOL',
+            'Disponible: ${state.availableBudgetSol.toStringAsFixed(2)} SOL · En uso ${deployed.toStringAsFixed(2)} SOL',
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const SizedBox(height: 4),
           Text(
-            'PnL realizado: ${state.realizedProfitSol.toStringAsFixed(3)} SOL Â· Retirado ${state.withdrawnProfitSol.toStringAsFixed(3)} SOL',
+            'PnL realizado: ${state.realizedProfitSol.toStringAsFixed(3)} SOL · Retirado ${state.withdrawnProfitSol.toStringAsFixed(3)} SOL',
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const SizedBox(height: 12),
           Text(
-            'El bot nunca invertirÃ¡ mÃ¡s que estos lÃ­mites. Ajusta segÃºn tu apetito de riesgo.',
+            'El bot nunca invertirá más que estos límites. Ajusta según tu apetito de riesgo.',
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const SizedBox(height: 12),
@@ -239,12 +239,12 @@ class _FilterSection extends StatelessWidget {
           _RRow(
             children: [
               _NumberField(
-                label: 'MC mÃ­nima USD',
+                label: 'MC mínima USD',
                 value: state.minMarketCap,
                 onChanged: notifier.updateMinMarketCap,
               ),
               _NumberField(
-                label: 'MC mÃ¡xima USD',
+                label: 'MC máxima USD',
                 value: state.maxMarketCap,
                 onChanged: notifier.updateMaxMarketCap,
               ),
@@ -254,12 +254,12 @@ class _FilterSection extends StatelessWidget {
           _RRow(
             children: [
               _NumberField(
-                label: 'Volumen 24h mÃ­nimo',
+                label: 'Volumen 24h mínimo',
                 value: state.minVolume24h,
                 onChanged: notifier.updateMinVolume,
               ),
               _NumberField(
-                label: 'Volumen 24h mÃ¡ximo',
+                label: 'Volumen 24h máximo',
                 value: state.maxVolume24h,
                 onChanged: notifier.updateMaxVolume,
               ),
@@ -311,7 +311,7 @@ class _RiskSection extends StatelessWidget {
             value: state.withdrawOnGain,
             onChanged: notifier.updateWithdrawOnGain,
             title: const Text('Retirar tras ganancia'),
-            subtitle: const Text('Si estÃ¡ activo, el bot moverÃ¡ las utilidades al presupuesto general antes de reinvertir.'),
+            subtitle: const Text('Si está activo, el bot moverá las utilidades al presupuesto general antes de reinvertir.'),
           ),
         ],
       ),
@@ -335,7 +335,7 @@ class _ExecutionModeSection extends StatelessWidget {
         children: [
           const _SectionHeader(
             icon: Icons.memory,
-            title: 'Motor de ejecuciÃ³n',
+            title: 'Motor de ejecución',
             subtitle: 'Selecciona entre Jupiter o PumpPortal',
           ),
           const SizedBox(height: 16),
@@ -355,7 +355,7 @@ class _ExecutionModeSection extends StatelessWidget {
           Text(
             state.executionMode == AutoInvestExecutionMode.jupiter
                 ? 'Usa quotes de Jupiter, ideal para tokens que ya migraron liquidez.'
-                : 'Construye Ã³rdenes sobre la bonding curve vÃ­a PumpPortal.',
+                : 'Construye órdenes sobre la bonding curve vía PumpPortal.',
             style: theme.textTheme.bodySmall,
           ),
           if (usingPumpPortal) ...[
@@ -411,7 +411,7 @@ class _BotToggleCard extends StatelessWidget {
                 Text(
                   state.walletAddress == null
                       ? 'Conecta una wallet para habilitar el bot.'
-                      : 'El bot evaluarÃ¡ los criterios en cada refresco.',
+                      : 'El bot evaluará los criterios en cada refresco.',
                   style: theme.textTheme.bodySmall,
                 ),
               ],
@@ -543,7 +543,7 @@ class _SimulationControls extends StatelessWidget {
               const SizedBox(width: 12),
               Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text('Simular auto invest', style: theme.textTheme.titleMedium),
-                Text('Prueba la configuraciÃ³n actual sin riesgo. Los resultados viven en la pestaÃ±a Resultados.', style: theme.textTheme.bodySmall),
+                Text('Prueba la configuración actual sin riesgo. Los resultados viven en la pestaña Resultados.', style: theme.textTheme.bodySmall),
               ])),
             ],
           ),
@@ -850,7 +850,7 @@ class _ActionShortcuts extends StatelessWidget {
       ),
       _ShortcutData(
         title: 'Analizar PnL',
-        subtitle: 'Insights IA/heurÃ­stico',
+        subtitle: 'Insights IA/heurístico',
         colors: const [Color(0xFF4FD1FF), Color(0xFF7B89FF)],
         icon: Icons.bolt,
         onTap: state.isAnalyzingResults ? null : notifier.analyzeSimulations,
@@ -860,7 +860,7 @@ class _ActionShortcuts extends StatelessWidget {
         subtitle: state.walletAddress == null
             ? 'Conecta una wallet'
             : state.isEnabled
-                ? 'Detiene nuevas Ã³rdenes'
+                ? 'Detiene nuevas órdenes'
                 : 'Usa las reglas actuales',
         colors: const [Color(0xFF4CFFCE), Color(0xFF7B6CFF)],
         icon: state.isEnabled ? Icons.pause : Icons.play_arrow,
@@ -956,7 +956,7 @@ class _PageHeader extends StatelessWidget {
     final theme = Theme.of(context);
     final subtitle = state.isEnabled
         ? 'Bot activo Â· monitoreando ${state.positions.length} posiciones'
-        : 'Configura las reglas y activa el bot cuando estÃ©s listo.';
+        : 'Configura las reglas y activa el bot cuando estés listo.';
     return SoftSurface(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -975,10 +975,10 @@ class _PageHeader extends StatelessWidget {
               ),
               OutlinedButton.icon(
                 onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Tips rÃ¡pidos disponibles en la documentaciÃ³n.')),
+                  const SnackBar(content: Text('Tips rápidos disponibles en la documentación.')),
                 ),
                 icon: const Icon(Icons.help_outline, size: 18),
-                label: const Text('GuÃ­a rÃ¡pida'),
+                label: const Text('Guía rápida'),
               ),
             ],
           ),
@@ -1061,7 +1061,7 @@ class _StatusPill extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          Text(active ? 'Conectada' : 'Sin vÃ­nculo',
+          Text(active ? 'Conectada' : 'Sin vínculo',
               style: theme.textTheme.bodySmall?.copyWith(color: Colors.white)),
         ],
       ),
@@ -1187,6 +1187,8 @@ class _WalletStatPill extends StatelessWidget {
     );
   }
 }
+
+
 
 
 
