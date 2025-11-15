@@ -955,7 +955,7 @@ class _PageHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final subtitle = state.isEnabled
-        ? 'Bot activo Â· monitoreando ${state.positions.length} posiciones'
+        ? 'Bot activo · monitoreando ${state.positions.length} posiciones'
         : 'Configura las reglas y activa el bot cuando estés listo.';
     return SoftSurface(
       child: Column(

@@ -12,6 +12,7 @@ import '../services/jupiter_swap_service.dart';
 import '../services/pump_fun_price_service.dart';
 import '../services/pump_portal_trade_service.dart';
 import '../services/wallet_execution_service.dart';
+import '../services/transaction_audit_logger.dart';
 import 'auto_invest_notifier.dart';
 
 const _lamportsPerSol = 1000000000;
@@ -117,10 +118,12 @@ class AutoInvestExecutor {
         .read(autoInvestProvider.notifier)
         .setStatus(
           autoState.executionMode == AutoInvestExecutionMode.jupiter
-              ? 'Preparando compra automatica de ${candidate.symbol} (${autoState.perCoinBudgetSol} SOL) via Jupiter.'
-              : 'Preparando compra automatica de ${candidate.symbol} (${autoState.perCoinBudgetSol} SOL) via PumpPortal.',
+              ? 'Preparando compra automática de ${candidate.symbol} (${autoState.perCoinBudgetSol} SOL) vía Jupiter.'
+              : 'Preparando compra automática de ${candidate.symbol} (${autoState.perCoinBudgetSol} SOL) vía PumpPortal.',
         );
     try {
+      // Precio de referencia al momento de la entrada (SOL por token)
+      final pumpQuote = await priceService.fetchQuote(candidate.mint);
       final signature = switch (autoState.executionMode) {
         AutoInvestExecutionMode.jupiter => await _executeViaJupiter(
           autoState,
@@ -132,6 +135,16 @@ class AutoInvestExecutor {
           candidate,
         ),
       };
+      // Registro de auditoría (CSV) para compras
+      unawaited(
+        ref.read(transactionAuditLoggerProvider).logBuyFromFeatured(
+              coin: candidate,
+              signature: signature,
+              entrySol: autoState.perCoinBudgetSol,
+              mode: autoState.executionMode,
+              entryPriceSol: pumpQuote.priceSol,
+            ),
+      );
       final notifier = ref.read(autoInvestProvider.notifier);
       notifier.recordExecution(
         ExecutionRecord(
@@ -297,6 +310,15 @@ class AutoInvestExecutor {
       } else {
         notifier.setStatus('Venta enviada para ${position.symbol}.');
       }
+      // Registro de auditoría preliminar de venta (esperado)
+      unawaited(
+        ref.read(transactionAuditLoggerProvider).logSellFromPosition(
+              position: position,
+              signature: signature,
+              expectedExitSol: expectedSol,
+              reason: reason,
+            ),
+      );
       unawaited(
         _trackSellConfirmation(
           signature: signature,
@@ -416,6 +438,21 @@ class AutoInvestExecutor {
             sellSignature: signature,
             realizedSol: realizedSol,
           );
+      // Registro de auditoría confirmado con PnL cuando sea posible
+      final pnl = realizedSol - position.entrySol;
+      final pnlPct = position.entrySol == 0
+          ? null
+          : (pnl / position.entrySol) * 100.0;
+      unawaited(
+        ref.read(transactionAuditLoggerProvider).logSellFromPosition(
+              position: position,
+              signature: signature,
+              expectedExitSol: realizedSol,
+              realizedExitSol: realizedSol,
+              pnlSol: pnl,
+              pnlPercent: pnlPct,
+            ),
+      );
     } catch (error) {
       ref
           .read(autoInvestProvider.notifier)

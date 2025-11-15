@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -33,6 +33,7 @@ class AutoInvestState {
     required this.analysisSummary,
     required this.executions,
     required this.positions,
+    required this.closedPositions,
     required this.executionMode,
     required this.pumpSlippagePercent,
     required this.pumpPriorityFeeSol,
@@ -69,6 +70,7 @@ class AutoInvestState {
     analysisSummary: null,
     executions: const [],
     positions: const [],
+    closedPositions: const [],
     executionMode: AutoInvestExecutionMode.jupiter,
     pumpSlippagePercent: 10,
     pumpPriorityFeeSol: 0.001,
@@ -103,6 +105,7 @@ class AutoInvestState {
   final String? analysisSummary;
   final List<ExecutionRecord> executions;
   final List<OpenPosition> positions;
+  final List<ClosedPosition> closedPositions;
   final AutoInvestExecutionMode executionMode;
   final double pumpSlippagePercent;
   final double pumpPriorityFeeSol;
@@ -141,6 +144,7 @@ class AutoInvestState {
     String? analysisSummary,
     List<ExecutionRecord>? executions,
     List<OpenPosition>? positions,
+    List<ClosedPosition>? closedPositions,
     AutoInvestExecutionMode? executionMode,
     double? pumpSlippagePercent,
     double? pumpPriorityFeeSol,
@@ -177,6 +181,7 @@ class AutoInvestState {
       analysisSummary: analysisSummary ?? this.analysisSummary,
       executions: executions ?? this.executions,
       positions: positions ?? this.positions,
+      closedPositions: closedPositions ?? this.closedPositions,
       executionMode: executionMode ?? this.executionMode,
       pumpSlippagePercent: pumpSlippagePercent ?? this.pumpSlippagePercent,
       pumpPriorityFeeSol: pumpPriorityFeeSol ?? this.pumpPriorityFeeSol,
@@ -223,6 +228,8 @@ class AutoInvestState {
     'walletBalanceUpdatedAt': walletBalanceUpdatedAt?.toIso8601String(),
     'solPriceUpdatedAt': solPriceUpdatedAt?.toIso8601String(),
     'positions': positions.map((p) => p.toJson()).toList(growable: false),
+    'closedPositions':
+        closedPositions.map((p) => p.toJson()).toList(growable: false),
   };
 
   static AutoInvestState fromJson(Map<String, dynamic> json) {
@@ -246,6 +253,12 @@ class AutoInvestState {
             .map(OpenPosition.fromJson)
             .toList() ??
         initial.positions;
+    final closedPositions =
+        (json['closedPositions'] as List<dynamic>?)
+            ?.whereType<Map<String, dynamic>>()
+            .map(ClosedPosition.fromJson)
+            .toList() ??
+        initial.closedPositions;
     final deployedFromPositions = positions.fold<double>(
       0,
       (sum, position) => sum + position.entrySol,
@@ -306,6 +319,7 @@ class AutoInvestState {
       ),
       pumpPool: json['pumpPool']?.toString() ?? initial.pumpPool,
       positions: positions,
+      closedPositions: closedPositions,
       realizedProfitSol: readDouble(
         'realizedProfitSol',
         initial.realizedProfitSol,
@@ -349,6 +363,10 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     final savedPositions = storage.loadPositions();
     if (savedPositions.isNotEmpty) {
       initial = initial.copyWith(positions: savedPositions);
+    }
+    final savedClosed = storage.loadClosedPositions();
+    if (savedClosed.isNotEmpty) {
+      initial = initial.copyWith(closedPositions: savedClosed);
     }
     final walletAddress = walletService.currentPublicKey;
     if (walletAddress != null) {
@@ -664,7 +682,7 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
           simulations: updated,
           isSimulationRunning: false,
           statusMessage:
-              'Simulación creada (${trades.length} operaciones, PnL total ${run.totalPnlSol.toStringAsFixed(2)} SOL).',
+              'SimulaciÃ³n creada (${trades.length} operaciones, PnL total ${run.totalPnlSol.toStringAsFixed(2)} SOL).',
         ),
         persist: false,
       );
@@ -691,7 +709,7 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
       _setState(
         state.copyWith(
           statusMessage:
-              'Define OPENAI_API_KEY via --dart-define para habilitar el análisis IA.',
+              'Define OPENAI_API_KEY via --dart-define para habilitar el anÃ¡lisis IA.',
         ),
         persist: false,
       );
@@ -707,7 +725,7 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
         state.copyWith(
           isAnalyzingResults: false,
           analysisSummary: summary,
-          statusMessage: 'Análisis IA actualizado.',
+          statusMessage: 'AnÃ¡lisis IA actualizado.',
         ),
         persist: false,
       );
@@ -733,6 +751,7 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     unawaited(storage.saveState(state));
     unawaited(storage.saveExecutions(state.executions));
     unawaited(storage.savePositions(state.positions));
+    unawaited(storage.saveClosedPositions(state.closedPositions));
   }
 
   void recordExecution(ExecutionRecord record) {
@@ -832,9 +851,42 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
       }
       withdrawn += pnl;
     }
+    // Construir y guardar posición cerrada
+    final tokenAmount = position.tokenAmount ?? 0;
+    final inferredEntryPrice = tokenAmount > 0
+        ? (position.entrySol / tokenAmount)
+        : (position.entryPriceSol ?? 0);
+    final inferredExitPrice = tokenAmount > 0
+        ? (realizedSol / tokenAmount)
+        : (position.lastPriceSol ?? 0);
+    final netPnl = (position.entryFeeSol != null && position.exitFeeSol != null)
+        ? (pnl - (position.entryFeeSol ?? 0) - (position.exitFeeSol ?? 0))
+        : null;
+    final closed = ClosedPosition(
+      mint: position.mint,
+      symbol: position.symbol,
+      executionMode: position.executionMode,
+      entrySol: position.entrySol,
+      exitSol: realizedSol,
+      tokenAmount: tokenAmount,
+      entryPriceSol: position.entryPriceSol ?? inferredEntryPrice,
+      exitPriceSol: inferredExitPrice,
+      pnlSol: pnl,
+      pnlPercent: position.entrySol == 0 ? 0 : (pnl / position.entrySol) * 100,
+      openedAt: position.openedAt,
+      closedAt: DateTime.now(),
+      buySignature: position.entrySignature,
+      sellSignature: sellSignature,
+      closeReason: position.alertType,
+      entryFeeSol: position.entryFeeSol,
+      exitFeeSol: position.exitFeeSol,
+      netPnlSol: netPnl,
+    );
+    final newClosed = [...state.closedPositions, closed];
     _setState(
       state.copyWith(
         positions: remaining,
+        closedPositions: newClosed,
         totalBudgetSol: nextTotal,
         availableBudgetSol: nextAvailable,
         realizedProfitSol: state.realizedProfitSol + pnl,
@@ -914,3 +966,5 @@ final autoInvestProvider =
     NotifierProvider<AutoInvestNotifier, AutoInvestState>(
       AutoInvestNotifier.new,
     );
+
+

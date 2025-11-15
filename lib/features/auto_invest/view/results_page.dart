@@ -44,8 +44,8 @@ class _SimulationResultsPageState extends ConsumerState<SimulationResultsPage> {
         child: Padding(
           padding: EdgeInsets.all(32),
           child: Text(
-            'Aun no hay simulaciones, ordenes ni posiciones guardadas.\n'
-            'Usa la pestana Auto invest para lanzar una simulacion o activar el bot.',
+            'Aún no hay simulaciones, órdenes ni posiciones guardadas.\n'
+            'Usa la pestaña Auto invest para lanzar una simulación o activar el bot.',
             textAlign: TextAlign.center,
           ),
         ),
@@ -88,7 +88,7 @@ class _SimulationResultsPageState extends ConsumerState<SimulationResultsPage> {
                   position.entrySignature,
                   refundBudget: true,
                   message:
-                      'PosiciÃƒÂ³n ${position.symbol} eliminada manualmente.',
+                      'Posición ${position.symbol} eliminada manualmente.',
                 ),
               ),
             ),
@@ -249,7 +249,7 @@ class _ResultsOverview extends StatelessWidget {
       ),
       _MetricData(
         icon: Icons.layers_outlined,
-        label: 'Exposicion abierta',
+        label: 'Exposición abierta',
         value: _formatSol(openExposure, solPrice),
         caption:
             '${state.positions.length} posiciones | ${_formatSigned(unrealized, solPrice)} sin realizar',
@@ -302,7 +302,7 @@ class _ResultsOverview extends StatelessWidget {
               Text('Salud del portafolio', style: theme.textTheme.titleLarge),
               const SizedBox(height: 4),
               Text(
-                'Resumen rapido de presupuesto, exposicion y resultados netos.',
+                'Resumen rápido de presupuesto, exposición y resultados netos.',
                 style: theme.textTheme.bodySmall,
               ),
               const SizedBox(height: 16),
@@ -662,7 +662,7 @@ class _PositionTile extends StatelessWidget {
                   ),
                   if (onRemove != null)
                     _CircleIconButton(
-                      tooltip: 'Eliminar posicion',
+                      tooltip: 'Eliminar posición',
                       icon: Icons.delete_outline,
                       onPressed: position.isClosing ? null : onRemove,
                     ),

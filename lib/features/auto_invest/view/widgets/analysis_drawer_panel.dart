@@ -85,8 +85,8 @@ class _CollapsedAnalysisCard extends StatelessWidget {
                     Text('IA resultados', style: theme.textTheme.titleMedium),
                     Text(
                       hasSummary
-                          ? 'Ultimo analisis disponible.'
-                          : 'Sin analisis aun.',
+                          ? 'Último análisis disponible.'
+                          : 'Sin análisis aún.',
                       style: theme.textTheme.bodySmall,
                     ),
                   ],
@@ -155,8 +155,8 @@ class _ExpandedAnalysisCard extends StatelessWidget {
                     Text('IA resultados', style: theme.textTheme.titleMedium),
                     Text(
                       summaryAvailable
-                          ? 'Ultimo analisis listo.'
-                          : 'Genera un analisis bajo demanda.',
+                          ? 'Último análisis listo.'
+                          : 'Genera un análisis bajo demanda.',
                       style: theme.textTheme.bodySmall,
                     ),
                   ],
@@ -189,7 +189,7 @@ class _ExpandedAnalysisCard extends StatelessWidget {
           if (!summaryAvailable && !isLoading) ...[
             const SizedBox(height: 16),
             Text(
-              'Genera un analisis cuando tengas posiciones cerradas.',
+              'Genera un análisis cuando tengas posiciones cerradas.',
               style: theme.textTheme.bodyMedium,
             ),
           ],
