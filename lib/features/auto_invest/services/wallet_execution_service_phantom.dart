@@ -72,6 +72,8 @@ class WalletExecutionService {
 
   Future<double?> getWalletBalance(String address) async => null;
 
+  Future<double?> getTransactionFee(String signature) async => null;
+
   String? _extractPublicKey(_PhantomProvider provider) {
     final pk = provider.publicKey;
     if (pk == null) return null;

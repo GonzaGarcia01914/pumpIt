@@ -129,14 +129,24 @@ class FeaturedCoinNotifier extends Notifier<FeaturedCoinState> {
         lastUpdated: DateTime.now(),
         clearError: true,
       );
-
-      unawaited(_generateInsight(filtered));
     } catch (error) {
       state = state.copyWith(
         isFetching: false,
         errorMessage: error.toString(),
       );
     }
+  }
+
+  Future<void> generateInsight({bool silent = false}) async {
+    if (state.coins.isEmpty) {
+      if (!silent) {
+        state = state.copyWith(
+          errorMessage: 'No hay memecoins para analizar.',
+        );
+      }
+      return;
+    }
+    await _generateInsight(state.coins);
   }
 
   Future<void> _generateInsight(List<FeaturedCoin> coins) async {

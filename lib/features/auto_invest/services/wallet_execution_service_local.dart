@@ -135,6 +135,24 @@ class WalletExecutionService {
     }
   }
 
+  Future<double?> getTransactionFee(String signature) async {
+    try {
+      final tx = await _connection.getTransaction(
+        signature,
+        config: solana.GetTransactionConfig(
+          encoding: solana.TransactionEncoding.jsonParsed,
+          commitment: solana.Commitment.confirmed,
+          maxSupportedTransactionVersion: 0,
+        ),
+      );
+      final feeLamports = tx?.meta?.fee;
+      if (feeLamports == null) return null;
+      return feeLamports / _lamportsPerSol;
+    } catch (_) {
+      return null;
+    }
+  }
+
   void _loadKeypairSync() {
     if (_localKeyPath.isEmpty) {
       return;

@@ -32,6 +32,8 @@ class OpenPosition extends Equatable {
     this.lastCheckedAt,
     this.alertType,
     this.alertTriggeredAt,
+    this.entryFeeSol,
+    this.exitFeeSol,
     this.isClosing = false,
   });
 
@@ -50,6 +52,8 @@ class OpenPosition extends Equatable {
   final DateTime? lastCheckedAt;
   final PositionAlertType? alertType;
   final DateTime? alertTriggeredAt;
+  final double? entryFeeSol;
+  final double? exitFeeSol;
   final bool isClosing;
 
   bool get hasTokenAmount => tokenAmount != null && tokenAmount! > 0;
@@ -68,6 +72,8 @@ class OpenPosition extends Equatable {
     Object? lastCheckedAt = _copySentinel,
     Object? alertType = _copySentinel,
     Object? alertTriggeredAt = _copySentinel,
+    Object? entryFeeSol = _copySentinel,
+    Object? exitFeeSol = _copySentinel,
     Object? isClosing = _copySentinel,
   }) {
     return OpenPosition(
@@ -104,6 +110,12 @@ class OpenPosition extends Equatable {
       alertTriggeredAt: identical(alertTriggeredAt, _copySentinel)
           ? this.alertTriggeredAt
           : alertTriggeredAt as DateTime?,
+      entryFeeSol: identical(entryFeeSol, _copySentinel)
+          ? this.entryFeeSol
+          : entryFeeSol as double?,
+      exitFeeSol: identical(exitFeeSol, _copySentinel)
+          ? this.exitFeeSol
+          : exitFeeSol as double?,
       isClosing: identical(isClosing, _copySentinel)
           ? this.isClosing
           : isClosing as bool,
@@ -126,6 +138,8 @@ class OpenPosition extends Equatable {
     'lastCheckedAt': lastCheckedAt?.toIso8601String(),
     'alertType': alertType?.name,
     'alertTriggeredAt': alertTriggeredAt?.toIso8601String(),
+    'entryFeeSol': entryFeeSol,
+    'exitFeeSol': exitFeeSol,
     'isClosing': isClosing,
   };
 
@@ -166,6 +180,8 @@ class OpenPosition extends Equatable {
       lastCheckedAt: parseDate(json['lastCheckedAt']),
       alertType: alertFromJson(json['alertType']),
       alertTriggeredAt: parseDate(json['alertTriggeredAt']),
+      entryFeeSol: (json['entryFeeSol'] as num?)?.toDouble(),
+      exitFeeSol: (json['exitFeeSol'] as num?)?.toDouble(),
       isClosing: json['isClosing'] as bool? ?? false,
     );
   }
@@ -187,6 +203,8 @@ class OpenPosition extends Equatable {
     lastCheckedAt,
     alertType,
     alertTriggeredAt,
+    entryFeeSol,
+    exitFeeSol,
     isClosing,
   ];
 }
@@ -208,6 +226,9 @@ class ClosedPosition extends Equatable {
     required this.buySignature,
     required this.sellSignature,
     this.closeReason,
+    this.entryFeeSol,
+    this.exitFeeSol,
+    this.netPnlSol,
   });
 
   final String mint;
@@ -225,6 +246,9 @@ class ClosedPosition extends Equatable {
   final String buySignature;
   final String sellSignature;
   final PositionAlertType? closeReason;
+  final double? entryFeeSol;
+  final double? exitFeeSol;
+  final double? netPnlSol;
 
   Map<String, dynamic> toJson() => {
     'mint': mint,
@@ -242,6 +266,9 @@ class ClosedPosition extends Equatable {
     'buySignature': buySignature,
     'sellSignature': sellSignature,
     'closeReason': closeReason?.name,
+    'entryFeeSol': entryFeeSol,
+    'exitFeeSol': exitFeeSol,
+    'netPnlSol': netPnlSol,
   };
 
   factory ClosedPosition.fromJson(Map<String, dynamic> json) {
@@ -282,6 +309,9 @@ class ClosedPosition extends Equatable {
       buySignature: json['buySignature']?.toString() ?? '',
       sellSignature: json['sellSignature']?.toString() ?? '',
       closeReason: alertFromJson(json['closeReason']),
+      entryFeeSol: (json['entryFeeSol'] as num?)?.toDouble(),
+      exitFeeSol: (json['exitFeeSol'] as num?)?.toDouble(),
+      netPnlSol: (json['netPnlSol'] as num?)?.toDouble(),
     );
   }
 
@@ -302,5 +332,8 @@ class ClosedPosition extends Equatable {
     buySignature,
     sellSignature,
     closeReason,
+    entryFeeSol,
+    exitFeeSol,
+    netPnlSol,
   ];
 }

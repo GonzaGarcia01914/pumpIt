@@ -26,5 +26,7 @@ class WalletExecutionService {
 
   Future<double?> getWalletBalance(String address) async => null;
 
+  Future<double?> getTransactionFee(String signature) async => null;
+
   void dispose() {}
 }

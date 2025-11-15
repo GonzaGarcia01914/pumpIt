@@ -1,9 +1,10 @@
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../services/sol_price_service.dart';
 import 'auto_invest_notifier.dart';
+import 'compat_shims.dart';
 
 class SolPriceTicker {
   SolPriceTicker(this.ref, this.service);
@@ -47,3 +48,4 @@ final solPriceTickerProvider = Provider<SolPriceTicker>((ref) {
   ref.onDispose(ticker.dispose);
   return ticker;
 });
+
