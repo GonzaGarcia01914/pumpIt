@@ -266,7 +266,7 @@ class _CoinList extends StatelessWidget {
 
     return ListView.separated(
       physics: const BouncingScrollPhysics(),
-      padding: const EdgeInsets.only(bottom: 32),
+      padding: const EdgeInsets.fromLTRB(0, 12, 0, 32),
       itemBuilder: (context, index) => FeaturedCoinTile(
         coin: state.coins[index],
         onLaunch: onLaunchFallback,

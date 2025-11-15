@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../featured_coins/models/featured_coin.dart';
+import '../../featured_coins/controller/featured_coin_notifier.dart';
 import '../models/execution_record.dart';
 import '../models/execution_mode.dart';
 import '../models/position.dart';
@@ -45,6 +46,9 @@ class AutoInvestState {
     required this.syncBudgetToWallet,
     required this.walletBudgetPercent,
     required this.perCoinPercentOfTotal,
+    required this.minReplies,
+    required this.maxAgeHours,
+    required this.onlyLive,
     this.walletBalanceUpdatedAt,
     this.solPriceUpdatedAt,
     this.statusMessage,
@@ -82,6 +86,9 @@ class AutoInvestState {
     syncBudgetToWallet: false,
     walletBudgetPercent: 0.5,
     perCoinPercentOfTotal: 0.1,
+    minReplies: 0,
+    maxAgeHours: 72,
+    onlyLive: false,
     walletBalanceUpdatedAt: null,
     solPriceUpdatedAt: null,
   );
@@ -117,6 +124,9 @@ class AutoInvestState {
   final bool syncBudgetToWallet;
   final double walletBudgetPercent;
   final double perCoinPercentOfTotal;
+  final double minReplies;
+  final double maxAgeHours;
+  final bool onlyLive;
   final DateTime? walletBalanceUpdatedAt;
   final DateTime? solPriceUpdatedAt;
   final String? statusMessage;
@@ -156,6 +166,9 @@ class AutoInvestState {
     bool? syncBudgetToWallet,
     double? walletBudgetPercent,
     double? perCoinPercentOfTotal,
+    double? minReplies,
+    double? maxAgeHours,
+    bool? onlyLive,
     DateTime? walletBalanceUpdatedAt,
     DateTime? solPriceUpdatedAt,
     String? statusMessage,
@@ -194,6 +207,9 @@ class AutoInvestState {
       walletBudgetPercent: walletBudgetPercent ?? this.walletBudgetPercent,
       perCoinPercentOfTotal:
           perCoinPercentOfTotal ?? this.perCoinPercentOfTotal,
+      minReplies: minReplies ?? this.minReplies,
+      maxAgeHours: maxAgeHours ?? this.maxAgeHours,
+      onlyLive: onlyLive ?? this.onlyLive,
       walletBalanceUpdatedAt:
           walletBalanceUpdatedAt ?? this.walletBalanceUpdatedAt,
       solPriceUpdatedAt: solPriceUpdatedAt ?? this.solPriceUpdatedAt,
@@ -225,6 +241,9 @@ class AutoInvestState {
     'syncBudgetToWallet': syncBudgetToWallet,
     'walletBudgetPercent': walletBudgetPercent,
     'perCoinPercentOfTotal': perCoinPercentOfTotal,
+    'minReplies': minReplies,
+    'maxAgeHours': maxAgeHours,
+    'onlyLive': onlyLive,
     'walletBalanceUpdatedAt': walletBalanceUpdatedAt?.toIso8601String(),
     'solPriceUpdatedAt': solPriceUpdatedAt?.toIso8601String(),
     'positions': positions.map((p) => p.toJson()).toList(growable: false),
@@ -336,6 +355,9 @@ class AutoInvestState {
           readDouble('walletBudgetPercent', initial.walletBudgetPercent),
       perCoinPercentOfTotal: readDouble(
           'perCoinPercentOfTotal', initial.perCoinPercentOfTotal),
+      minReplies: readDouble('minReplies', initial.minReplies),
+      maxAgeHours: readDouble('maxAgeHours', initial.maxAgeHours),
+      onlyLive: json['onlyLive'] as bool? ?? initial.onlyLive,
       walletBalanceUpdatedAt:
           parseDate(json['walletBalanceUpdatedAt']) ?? initial.walletBalanceUpdatedAt,
       solPriceUpdatedAt:
@@ -384,6 +406,8 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
 
   void updateMinMarketCap(double value) {
     _setState(state.copyWith(minMarketCap: value));
+    // Sincroniza filtros de Featured para que el executor use una lista consistente
+    _syncFeaturedFilters(minMarketCap: value.round());
   }
 
   void updateMaxMarketCap(double value) {
@@ -392,10 +416,27 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
 
   void updateMinVolume(double value) {
     _setState(state.copyWith(minVolume24h: value));
+    _syncFeaturedFilters(minVolume: value);
   }
 
   void updateMaxVolume(double value) {
     _setState(state.copyWith(maxVolume24h: value));
+    _syncFeaturedFilters();
+  }
+
+  void _syncFeaturedFilters({int? minMarketCap, double? minVolume}) {
+    try {
+      final featuredState = ref.read(featuredCoinProvider);
+      ref.read(featuredCoinProvider.notifier).applyFilters(
+            minMarketCap: minMarketCap ?? featuredState.minUsdMarketCap,
+            minVolume: minVolume ?? featuredState.minVolume24h,
+            maxVolume: state.maxVolume24h,
+            createdAfter: featuredState.createdAfter,
+            sortOption: featuredState.sortOption,
+          );
+    } catch (_) {
+      // Si Featured no está disponible en este contexto, ignoramos silenciosamente.
+    }
   }
 
   void updateStopLoss(double value) {
@@ -457,6 +498,21 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
 
   void updatePumpPool(String value) {
     _setState(state.copyWith(pumpPool: value, clearMessage: true));
+  }
+
+  // Nuevos criterios de selección
+  void updateMinReplies(double value) {
+    final normalized = value.clamp(0, 100000).toDouble();
+    _setState(state.copyWith(minReplies: normalized));
+  }
+
+  void updateMaxAgeHours(double value) {
+    final normalized = value.clamp(0, 720).toDouble();
+    _setState(state.copyWith(maxAgeHours: normalized));
+  }
+
+  void updateOnlyLive(bool value) {
+    _setState(state.copyWith(onlyLive: value));
   }
 
   Future<void> refreshWalletBalance() async {

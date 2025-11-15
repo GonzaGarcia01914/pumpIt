@@ -107,25 +107,53 @@ class _BudgetSection extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text('Presupuesto total (% de la wallet)', style: Theme.of(context).textTheme.labelMedium),
-          Wrap(
-            spacing: 8,
-            runSpacing: 4,
-            children: [
-              for (final p in [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0])
-                _PercentChip(
-                  label: '${(p*100).toInt()}%',
-                  selected: (state.walletBudgetPercent - p).abs() < 0.001,
-                  onPressed: state.walletBalanceSol <= 0
-                      ? null
-                      : () {
-                          if (state.syncBudgetToWallet) {
-                            notifier.setAutoBudgetPercent(p);
-                          } else {
-                            notifier.applyTotalBudgetPercent(p);
-                          }
-                        },
-                ),
-            ],
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                for (final p in [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0])
+                  _PercentChip(
+                    label: '${(p*100).toInt()}%',
+                    selected: (state.walletBudgetPercent - p).abs() < 0.001,
+                    onPressed: state.walletBalanceSol <= 0
+                        ? null
+                        : () {
+                            if (state.syncBudgetToWallet) {
+                              notifier.setAutoBudgetPercent(p);
+                            } else {
+                              notifier.applyTotalBudgetPercent(p);
+                            }
+                          },
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text('Máximo por memecoin (% del presupuesto)', style: Theme.of(context).textTheme.labelMedium),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                for (final p in [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0])
+                  _PercentChip(
+                    label: '${(p*100).toInt()}%',
+                    selected: (state.perCoinPercentOfTotal - p).abs() < 0.001,
+                    onPressed: state.totalBudgetSol <= 0
+                        ? null
+                        : () {
+                            if (state.syncBudgetToWallet) {
+                              notifier.setAutoPerCoinPercent(p);
+                            } else {
+                              notifier.applyPerCoinPercent(p);
+                            }
+                          },
+                  ),
+              ],
+            ),
           ),
           const SizedBox(height: 10),
           _RRow(
@@ -233,7 +261,7 @@ class _FilterSection extends StatelessWidget {
           const _SectionHeader(
             icon: Icons.tune_rounded,
             title: 'Criterios de mercado',
-            subtitle: 'Rangos de market cap y volumen',
+            subtitle: 'Rangos de market cap, volumen y señales sociales',
           ),
           const SizedBox(height: 18),
           _RRow(
@@ -264,6 +292,28 @@ class _FilterSection extends StatelessWidget {
                 onChanged: notifier.updateMaxVolume,
               ),
             ],
+          ),
+          const SizedBox(height: 16),
+          _RRow(
+            children: [
+              _NumberField(
+                label: 'Mínimo replies',
+                value: state.minReplies,
+                onChanged: notifier.updateMinReplies,
+              ),
+              _NumberField(
+                label: 'Antigüedad máx. (h)',
+                value: state.maxAgeHours,
+                onChanged: notifier.updateMaxAgeHours,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          SwitchListTile.adaptive(
+            value: state.onlyLive,
+            onChanged: notifier.updateOnlyLive,
+            title: const Text('Solo en vivo (excluir completadas)'),
+            subtitle: const Text('Restringe a memecoins con bonding curve activa.'),
           ),
         ],
       ),

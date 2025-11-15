@@ -15,6 +15,7 @@ class FeaturedCoinState {
     required this.isInsightLoading,
     required this.minUsdMarketCap,
     required this.minVolume24h,
+    required this.maxVolume24h,
     required this.createdAfter,
     required this.sortOption,
     this.insight,
@@ -28,6 +29,7 @@ class FeaturedCoinState {
         isInsightLoading: false,
         minUsdMarketCap: 15000,
         minVolume24h: 0,
+        maxVolume24h: 0,
         createdAfter: null,
         sortOption: FeaturedSortOption.highestCap,
       );
@@ -37,6 +39,7 @@ class FeaturedCoinState {
   final bool isInsightLoading;
   final int minUsdMarketCap;
   final double minVolume24h;
+  final double maxVolume24h;
   final DateTime? createdAfter;
   final FeaturedSortOption sortOption;
   final AiInsight? insight;
@@ -49,6 +52,7 @@ class FeaturedCoinState {
     bool? isInsightLoading,
     int? minUsdMarketCap,
     double? minVolume24h,
+    double? maxVolume24h,
     DateTime? createdAfter,
     FeaturedSortOption? sortOption,
     AiInsight? insight,
@@ -63,6 +67,7 @@ class FeaturedCoinState {
       isInsightLoading: isInsightLoading ?? this.isInsightLoading,
       minUsdMarketCap: minUsdMarketCap ?? this.minUsdMarketCap,
       minVolume24h: minVolume24h ?? this.minVolume24h,
+      maxVolume24h: maxVolume24h ?? this.maxVolume24h,
       createdAfter: resetCreatedAfter ? null : createdAfter ?? this.createdAfter,
       sortOption: sortOption ?? this.sortOption,
       insight: insight ?? this.insight,
@@ -104,6 +109,7 @@ class FeaturedCoinNotifier extends Notifier<FeaturedCoinState> {
         limit: 80,
         marketCapMin: state.minUsdMarketCap.toDouble(),
         volume24hMin: state.minVolume24h <= 0 ? null : state.minVolume24h,
+        volume24hMax: state.maxVolume24h <= 0 ? null : state.maxVolume24h,
       );
 
       final filtered = coins.where((coin) {
@@ -199,12 +205,14 @@ class FeaturedCoinNotifier extends Notifier<FeaturedCoinState> {
   void applyFilters({
     required int minMarketCap,
     required double minVolume,
+    double? maxVolume,
     DateTime? createdAfter,
     FeaturedSortOption? sortOption,
   }) {
     state = state.copyWith(
       minUsdMarketCap: minMarketCap,
       minVolume24h: minVolume,
+      maxVolume24h: maxVolume ?? state.maxVolume24h,
       createdAfter: createdAfter,
       resetCreatedAfter: createdAfter == null,
       sortOption: sortOption ?? state.sortOption,

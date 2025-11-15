@@ -179,12 +179,22 @@ class AutoInvestExecutor {
     List<FeaturedCoin> coins,
     AutoInvestState autoState,
   ) {
+    final now = DateTime.now();
     for (final coin in coins) {
       if (coin.usdMarketCap < autoState.minMarketCap ||
           coin.usdMarketCap > autoState.maxMarketCap) {
         continue;
       }
-      if (autoState.executionMode == AutoInvestExecutionMode.pumpPortal) {
+      if (autoState.minReplies > 0 &&
+          coin.replyCount.toDouble() < autoState.minReplies) {
+        continue;
+      }
+      if (autoState.maxAgeHours > 0) {
+        final ageHours = now.difference(coin.createdAt).inMinutes / 60.0;
+        if (ageHours > autoState.maxAgeHours) continue;
+      }
+      if (autoState.onlyLive ||
+          autoState.executionMode == AutoInvestExecutionMode.pumpPortal) {
         if (!coin.isCurrentlyLive || coin.isComplete) {
           continue;
         }
