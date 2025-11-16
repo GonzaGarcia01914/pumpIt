@@ -58,7 +58,7 @@ class AutoInvestPage extends ConsumerWidget {
             AnalysisDrawerPanel(
               summary: state.analysisSummary,
               isLoading: state.isAnalyzingResults,
-              onAnalyze: notifier.analyzeSimulations,
+              onAnalyze: notifier.analyzeClosedPositions,
               collapsed: true,
             ),
             if (state.statusMessage != null) ...[
@@ -361,6 +361,15 @@ class _FilterSection extends StatelessWidget {
             title: const Text('Solo en vivo (excluir completadas)'),
             subtitle: const Text(
               'Restringe a memecoins con bonding curve activa.',
+            ),
+          ),
+          const SizedBox(height: 8),
+          SwitchListTile.adaptive(
+            value: state.preferNewest,
+            onChanged: notifier.updatePreferNewest,
+            title: const Text('Priorizar tokens más recientes'),
+            subtitle: const Text(
+              'Si está activo, el bot elegirá primero los mints más nuevos que cumplan los filtros.',
             ),
           ),
         ],
@@ -1257,7 +1266,8 @@ class _ActionShortcuts extends StatelessWidget {
         subtitle: 'Insights IA/heurístico',
         colors: const [Color(0xFF4FD1FF), Color(0xFF7B89FF)],
         icon: Icons.bolt,
-        onTap: state.isAnalyzingResults ? null : notifier.analyzeSimulations,
+        onTap:
+            state.isAnalyzingResults ? null : notifier.analyzeClosedPositions,
       ),
       _ShortcutData(
         title: state.isEnabled ? 'Pausar bot' : 'Activar bot',

@@ -11,6 +11,7 @@ import 'features/auto_invest/controller/sol_price_ticker.dart';
 import 'features/auto_invest/models/position.dart';
 import 'package:pump_it_baby/features/auto_invest/view/auto_invest_page.dart';
 import 'features/auto_invest/view/results_page.dart';
+import 'core/widgets/global_log_banner.dart';
 import 'features/featured_coins/view/featured_coin_page.dart';
 
 Future<void> main() async {
@@ -131,6 +132,8 @@ class HomeTabsPage extends ConsumerWidget {
               ),
             ),
           ),
+          // Global logs overlay
+          const GlobalLogBanner(),
         ],
       ),
     );

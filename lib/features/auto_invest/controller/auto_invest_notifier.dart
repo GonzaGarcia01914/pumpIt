@@ -12,6 +12,7 @@ import '../models/simulation_models.dart';
 import '../services/auto_invest_storage.dart';
 import '../services/wallet_execution_service.dart';
 import '../services/simulation_analysis_service.dart';
+import '../../../core/log/global_log.dart';
 
 class AutoInvestState {
   const AutoInvestState({
@@ -49,6 +50,7 @@ class AutoInvestState {
     required this.minReplies,
     required this.maxAgeHours,
     required this.onlyLive,
+    required this.preferNewest,
     required this.includeManualMints,
     required this.manualMints,
     this.walletBalanceUpdatedAt,
@@ -91,6 +93,7 @@ class AutoInvestState {
     minReplies: 0,
     maxAgeHours: 72,
     onlyLive: false,
+    preferNewest: false,
     includeManualMints: false,
     manualMints: const [],
     walletBalanceUpdatedAt: null,
@@ -131,14 +134,19 @@ class AutoInvestState {
   final double minReplies;
   final double maxAgeHours;
   final bool onlyLive;
+  final bool preferNewest;
   final bool includeManualMints;
   final List<String> manualMints;
   final DateTime? walletBalanceUpdatedAt;
   final DateTime? solPriceUpdatedAt;
   final String? statusMessage;
 
-  double get deployedBudgetSol =>
-      (totalBudgetSol - availableBudgetSol).clamp(0, double.infinity);
+  double get deployedBudgetSol {
+    final exposure = positions.fold<double>(0, (sum, position) {
+      return sum + position.entrySol;
+    });
+    return exposure.clamp(0, totalBudgetSol);
+  }
 
   AutoInvestState copyWith({
     bool? isEnabled,
@@ -175,6 +183,7 @@ class AutoInvestState {
     double? minReplies,
     double? maxAgeHours,
     bool? onlyLive,
+    bool? preferNewest,
     bool? includeManualMints,
     List<String>? manualMints,
     DateTime? walletBalanceUpdatedAt,
@@ -218,6 +227,7 @@ class AutoInvestState {
       minReplies: minReplies ?? this.minReplies,
       maxAgeHours: maxAgeHours ?? this.maxAgeHours,
       onlyLive: onlyLive ?? this.onlyLive,
+      preferNewest: preferNewest ?? this.preferNewest,
       includeManualMints: includeManualMints ?? this.includeManualMints,
       manualMints: manualMints ?? this.manualMints,
       walletBalanceUpdatedAt:
@@ -254,6 +264,7 @@ class AutoInvestState {
     'minReplies': minReplies,
     'maxAgeHours': maxAgeHours,
     'onlyLive': onlyLive,
+    'preferNewest': preferNewest,
     'includeManualMints': includeManualMints,
     'manualMints': manualMints,
     'walletBalanceUpdatedAt': walletBalanceUpdatedAt?.toIso8601String(),
@@ -378,6 +389,7 @@ class AutoInvestState {
       minReplies: readDouble('minReplies', initial.minReplies),
       maxAgeHours: readDouble('maxAgeHours', initial.maxAgeHours),
       onlyLive: json['onlyLive'] as bool? ?? initial.onlyLive,
+      preferNewest: json['preferNewest'] as bool? ?? initial.preferNewest,
       includeManualMints:
           json['includeManualMints'] as bool? ?? initial.includeManualMints,
       manualMints:
@@ -583,6 +595,10 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     _setState(state.copyWith(onlyLive: value));
   }
 
+  void updatePreferNewest(bool value) {
+    _setState(state.copyWith(preferNewest: value));
+  }
+
   Future<void> refreshWalletBalance() async {
     final address = state.walletAddress;
     if (address == null || address.isEmpty) {
@@ -699,18 +715,20 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     updatePerCoinBudget((state.totalBudgetSol * percent).toDouble());
   }
 
-  void setStatus(String message) {
+  void setStatus(String message, {AppLogLevel level = AppLogLevel.neutral}) {
     _setState(state.copyWith(statusMessage: message), persist: false);
+    try {
+      ref.read(globalLogProvider.notifier).show(message, level: level);
+    } catch (_) {
+      // En contextos donde el globalLogProvider no esté disponible, ignorar.
+    }
   }
 
   Future<void> connectWallet() async {
     if (!walletService.isAvailable) {
-      _setState(
-        state.copyWith(
-          statusMessage:
-              'Wallet no disponible. En web conecta Phantom; en desktop define LOCAL_KEY_PATH.',
-        ),
-        persist: false,
+      setStatus(
+        'Wallet no disponible. En web conecta Phantom; en desktop define LOCAL_KEY_PATH.',
+        level: AppLogLevel.error,
       );
       return;
     }
@@ -720,34 +738,20 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     );
     try {
       final address = await walletService.connect();
-      _setState(
-        state.copyWith(
-          walletAddress: address,
-          isConnecting: false,
-          statusMessage: 'Wallet conectada.',
-        ),
-      );
+      _setState(state.copyWith(walletAddress: address, isConnecting: false));
+      setStatus('Wallet conectada.', level: AppLogLevel.success);
       // Intentar leer saldo inmediatamente si hay soporte
       unawaited(refreshWalletBalance());
     } catch (error) {
-      _setState(
-        state.copyWith(
-          isConnecting: false,
-          statusMessage: 'Error al conectar: $error',
-        ),
-        persist: false,
-      );
+      _setState(state.copyWith(isConnecting: false), persist: false);
+      setStatus('Error al conectar: $error', level: AppLogLevel.error);
     }
   }
 
   Future<void> disconnectWallet() async {
     await walletService.disconnect();
-    _setState(
-      state.copyWith(
-        walletAddress: null,
-        statusMessage: 'Wallet desconectada.',
-      ),
-    );
+    _setState(state.copyWith(walletAddress: null));
+    setStatus('Wallet desconectada.');
   }
 
   Future<void> simulate(List<FeaturedCoin> coins) async {
@@ -864,6 +868,52 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     }
   }
 
+  Future<void> analyzeClosedPositions() async {
+    if (state.closedPositions.isEmpty) {
+      _setState(
+        state.copyWith(statusMessage: 'No hay posiciones cerradas para analizar.'),
+        persist: false,
+      );
+      return;
+    }
+    if (!analysisService.isEnabled) {
+      _setState(
+        state.copyWith(
+          statusMessage:
+              'Define OPENAI_API_KEY via --dart-define para habilitar el análisis IA.',
+        ),
+        persist: false,
+      );
+      return;
+    }
+    _setState(
+      state.copyWith(isAnalyzingResults: true, clearMessage: true),
+      persist: false,
+    );
+    try {
+      final summary = await analysisService.summarizeClosedTrades(
+        trades: state.closedPositions,
+        state: state,
+      );
+      _setState(
+        state.copyWith(
+          isAnalyzingResults: false,
+          analysisSummary: summary,
+          statusMessage: 'Análisis IA de cerradas actualizado.',
+        ),
+        persist: false,
+      );
+    } catch (error) {
+      _setState(
+        state.copyWith(
+          isAnalyzingResults: false,
+          statusMessage: 'Error analizando cerradas: $error',
+        ),
+        persist: false,
+      );
+    }
+  }
+
   void _setState(AutoInvestState newState, {bool persist = true}) {
     state = newState;
     if (persist) {
@@ -899,10 +949,7 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
         clearMessage: true,
       ),
     );
-    _setState(
-      state.copyWith(statusMessage: 'Resultados reiniciados.'),
-      persist: false,
-    );
+    setStatus('Resultados reiniciados.');
   }
 
   void recordPositionEntry({
@@ -1035,10 +1082,11 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
         availableBudgetSol: nextAvailable,
         realizedProfitSol: state.realizedProfitSol + pnl,
         withdrawnProfitSol: withdrawn,
-        statusMessage:
-            'Posición ${position.symbol} cerrada (${pnl >= 0 ? '+' : ''}${pnl.toStringAsFixed(3)} SOL).',
       ),
     );
+    final msg =
+        'Posición ${position.symbol} cerrada (${pnl >= 0 ? '+' : ''}${pnl.toStringAsFixed(3)} SOL).';
+    setStatus(msg, level: pnl >= 0 ? AppLogLevel.success : AppLogLevel.neutral);
   }
 
   void updatePositionMonitoring(
@@ -1077,10 +1125,7 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
   }
 
   void recordExecutionError(String symbol, String error) {
-    _setState(
-      state.copyWith(statusMessage: 'Error en orden ($symbol): $error'),
-      persist: false,
-    );
+    setStatus('Error en orden ($symbol): $error', level: AppLogLevel.error);
   }
 
   void updateExecutionStatus(

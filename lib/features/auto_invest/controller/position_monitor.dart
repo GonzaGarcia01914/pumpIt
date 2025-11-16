@@ -6,6 +6,7 @@ import '../models/position.dart';
 import '../services/pump_fun_price_service.dart';
 import 'auto_invest_executor.dart';
 import 'auto_invest_notifier.dart';
+import '../../../core/log/global_log.dart';
 
 class AutoInvestPositionMonitor {
   AutoInvestPositionMonitor(this.ref, this.priceService);
@@ -213,7 +214,10 @@ class AutoInvestPositionMonitor {
     _errorCooldown[position.entrySignature] = now;
     ref
         .read(autoInvestProvider.notifier)
-        .setStatus('Monitoreo falló para ${position.symbol}: $error');
+        .setStatus(
+          'Monitoreo falló para ${position.symbol}: $error',
+          level: AppLogLevel.error,
+        );
   }
 
   void dispose() {

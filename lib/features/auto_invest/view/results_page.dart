@@ -55,7 +55,7 @@ class _SimulationResultsPageState extends ConsumerState<SimulationResultsPage> {
     final analysisPanel = AnalysisDrawerPanel(
       summary: state.analysisSummary,
       isLoading: state.isAnalyzingResults,
-      onAnalyze: notifier.analyzeSimulations,
+      onAnalyze: notifier.analyzeClosedPositions,
       collapsed: _analysisCollapsed,
       onToggle: () {
         setState(() {
@@ -70,8 +70,12 @@ class _SimulationResultsPageState extends ConsumerState<SimulationResultsPage> {
         ..add(
           Align(
             alignment: Alignment.centerRight,
-            child: OutlinedButton.icon(
-              icon: const Icon(Icons.refresh),
+            child: FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFEF5350),
+                foregroundColor: Colors.white,
+              ),
+              icon: const Icon(Icons.warning_amber_rounded),
               label: const Text('Reset resultados'),
               onPressed: () async {
                 final confirmed =
@@ -102,6 +106,7 @@ class _SimulationResultsPageState extends ConsumerState<SimulationResultsPage> {
             ),
           ),
         )
+        ..add(const SizedBox(height: 12))
         ..add(_ResultsOverview(state: state))
         ..add(const SizedBox(height: 24));
       if (hasPositions) {

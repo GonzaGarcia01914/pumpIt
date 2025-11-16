@@ -14,6 +14,7 @@ import '../services/pump_portal_trade_service.dart';
 import '../services/wallet_execution_service.dart';
 import '../services/transaction_audit_logger.dart';
 import 'auto_invest_notifier.dart';
+import '../../../core/log/global_log.dart';
 
 const _lamportsPerSol = 1000000000;
 
@@ -78,6 +79,7 @@ class AutoInvestExecutor {
           .read(autoInvestProvider.notifier)
           .setStatus(
             'Wallet no disponible. Verifica Phantom (web) o LOCAL_KEY_PATH (desktop).',
+            level: AppLogLevel.error,
           );
       return;
     }
@@ -96,6 +98,7 @@ class AutoInvestExecutor {
           .read(autoInvestProvider.notifier)
           .setStatus(
             'Presupuesto disponible (${autoState.availableBudgetSol.toStringAsFixed(2)} SOL) insuficiente para nueva entrada.',
+            level: AppLogLevel.error,
           );
       return;
     }
@@ -112,6 +115,7 @@ class AutoInvestExecutor {
               'Presupuesto por meme ('
               '${autoState.perCoinBudgetSol.toStringAsFixed(4)} SOL) demasiado bajo. Usa al menos '
               '${minBudget.toStringAsFixed(3)} SOL para cubrir ATA + priority fee.',
+              level: AppLogLevel.error,
             );
         return;
       }
@@ -215,32 +219,51 @@ class AutoInvestExecutor {
     List<FeaturedCoin> coins,
     AutoInvestState autoState,
   ) {
+    final filtered = _filterCoinsByRecencyAndParams(
+      coins,
+      autoState,
+      sortByNewest: autoState.preferNewest,
+    );
+    if (filtered.isEmpty) return null;
+    return filtered.first;
+  }
+
+  // Devuelve la lista de tokens que cumplen los parámetros del autoinvest,
+  // ordenada por fecha de creación (más recientes primero).
+  List<FeaturedCoin> _filterCoinsByRecencyAndParams(
+    List<FeaturedCoin> coins,
+    AutoInvestState autoState, {
+    bool sortByNewest = false,
+  }) {
     final now = DateTime.now();
-    for (final coin in coins) {
+    final filtered = coins.where((coin) {
       if (coin.usdMarketCap < autoState.minMarketCap ||
           coin.usdMarketCap > autoState.maxMarketCap) {
-        continue;
+        return false;
       }
       if (autoState.minReplies > 0 &&
           coin.replyCount.toDouble() < autoState.minReplies) {
-        continue;
+        return false;
       }
       if (autoState.maxAgeHours > 0) {
         final ageHours = now.difference(coin.createdAt).inMinutes / 60.0;
-        if (ageHours > autoState.maxAgeHours) continue;
+        if (ageHours > autoState.maxAgeHours) return false;
       }
       if (autoState.onlyLive ||
           autoState.executionMode == AutoInvestExecutionMode.pumpPortal) {
         if (!coin.isCurrentlyLive || coin.isComplete) {
-          continue;
+          return false;
         }
       }
       if (_recentMints.containsKey(coin.mint)) {
-        continue;
+        return false;
       }
-      return coin;
+      return true;
+    }).toList();
+    if (sortByNewest) {
+      filtered.sort((a, b) => b.createdAt.compareTo(a.createdAt));
     }
-    return null;
+    return filtered;
   }
 
   Future<String> _executeViaJupiter(
@@ -311,12 +334,14 @@ class AutoInvestExecutor {
     if (walletAddress == null) {
       notifier.setStatus(
         'Wallet no conectada; no se puede vender ${position.symbol}.',
+        level: AppLogLevel.error,
       );
       return;
     }
     if (!wallet.isAvailable) {
       notifier.setStatus(
         'Wallet no disponible para vender ${position.symbol}.',
+        level: AppLogLevel.error,
       );
       return;
     }
@@ -357,9 +382,13 @@ class AutoInvestExecutor {
       if (reason != null) {
         notifier.setStatus(
           'Venta automática de ${position.symbol} por ${reason.label.toLowerCase()}.',
+          level: AppLogLevel.success,
         );
       } else {
-        notifier.setStatus('Venta enviada para ${position.symbol}.');
+        notifier.setStatus(
+          'Venta enviada para ${position.symbol}.',
+          level: AppLogLevel.success,
+        );
       }
       // Registro de auditoría preliminar de venta (esperado)
       unawaited(
@@ -383,7 +412,10 @@ class AutoInvestExecutor {
     } catch (error) {
       _positionsSelling.remove(position.entrySignature);
       notifier.setPositionClosing(position.entrySignature, false);
-      notifier.setStatus('Venta falló (${position.symbol}): $error');
+      notifier.setStatus(
+        'Venta falló (${position.symbol}): $error',
+        level: AppLogLevel.error,
+      );
     }
   }
 
@@ -458,7 +490,10 @@ class AutoInvestExecutor {
         } catch (error) {
           ref
               .read(autoInvestProvider.notifier)
-              .setStatus('No se pudo leer el fill ($symbol): $error');
+              .setStatus(
+                'No se pudo leer el fill ($symbol): $error',
+                level: AppLogLevel.error,
+              );
         }
       }
     } catch (error) {
@@ -471,7 +506,7 @@ class AutoInvestExecutor {
           );
       ref
           .read(autoInvestProvider.notifier)
-          .setStatus('Orden falló ($symbol): $error');
+          .setStatus('Orden falló ($symbol): $error', level: AppLogLevel.error);
     }
   }
 
@@ -534,7 +569,10 @@ class AutoInvestExecutor {
           .setPositionClosing(position.entrySignature, false);
       ref
           .read(autoInvestProvider.notifier)
-          .setStatus('Venta falló (${position.symbol}): $error');
+          .setStatus(
+            'Venta falló (${position.symbol}): $error',
+            level: AppLogLevel.error,
+          );
     } finally {
       _positionsSelling.remove(position.entrySignature);
     }
