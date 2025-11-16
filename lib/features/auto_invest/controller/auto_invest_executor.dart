@@ -36,6 +36,7 @@ class AutoInvestExecutor {
   bool _isRunning = false;
   final Map<String, DateTime> _recentMints = {};
   final Set<String> _positionsSelling = {};
+  bool _budgetLocked = false;
 
   void init() {
     ref.listen<AutoInvestState>(
@@ -55,6 +56,22 @@ class AutoInvestExecutor {
     }
     if (!wallet.isAvailable) {
       return;
+    }
+    final lacksBudget =
+        autoState.availableBudgetSol + 1e-9 < autoState.perCoinBudgetSol;
+    if (lacksBudget) {
+      if (!_budgetLocked) {
+        _budgetLocked = true;
+        ref
+            .read(autoInvestProvider.notifier)
+            .setStatus(
+              'Presupuesto disponible ('
+              '${autoState.availableBudgetSol.toStringAsFixed(3)} SOL) insuficiente para nuevas compras.',
+            );
+      }
+      return;
+    } else if (_budgetLocked) {
+      _budgetLocked = false;
     }
     if (_isRunning) {
       return;
