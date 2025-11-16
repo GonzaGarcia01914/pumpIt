@@ -83,10 +83,13 @@ class AutoInvestExecutor {
     }
 
     final coins = ref.read(featuredCoinProvider).coins;
-    if (coins.isEmpty) return;
 
     _cleanupRecent();
-    final candidate = _pickCandidate(coins, autoState);
+    FeaturedCoin? candidate;
+    if (autoState.includeManualMints && autoState.manualMints.isNotEmpty) {
+      candidate = _pickManualCandidate(autoState);
+    }
+    candidate ??= _pickCandidate(coins, autoState);
     if (candidate == null) return;
     if (autoState.availableBudgetSol < autoState.perCoinBudgetSol) {
       ref
@@ -137,7 +140,9 @@ class AutoInvestExecutor {
       };
       // Registro de auditoría (CSV) para compras
       unawaited(
-        ref.read(transactionAuditLoggerProvider).logBuyFromFeatured(
+        ref
+            .read(transactionAuditLoggerProvider)
+            .logBuyFromFeatured(
               coin: candidate,
               signature: signature,
               entrySol: autoState.perCoinBudgetSol,
@@ -173,6 +178,37 @@ class AutoInvestExecutor {
           .recordExecutionError(candidate.symbol, error.toString());
       _recentMints[candidate.mint] = DateTime.now();
     }
+  }
+
+  FeaturedCoin? _pickManualCandidate(AutoInvestState autoState) {
+    // Prefer manual mints that are not recently attempted and not already held
+    final heldMints = {for (final p in autoState.positions) p.mint};
+    for (final mint in autoState.manualMints) {
+      final m = mint.trim();
+      if (m.isEmpty) continue;
+      if (_recentMints.containsKey(m)) continue;
+      if (heldMints.contains(m)) continue;
+      // Build a lightweight candidate; filters will be skipped for manual entries
+      return FeaturedCoin(
+        mint: m,
+        name: 'Manual',
+        symbol: m.length >= 4
+            ? m.substring(0, 4).toUpperCase()
+            : m.toUpperCase(),
+        imageUri: '',
+        marketCapSol: 0,
+        usdMarketCap: 0,
+        createdAt: DateTime.now(),
+        lastReplyAt: null,
+        replyCount: 0,
+        isComplete: false,
+        isCurrentlyLive: true,
+        twitterUrl: null,
+        telegramUrl: null,
+        websiteUrl: null,
+      );
+    }
+    return null;
   }
 
   FeaturedCoin? _pickCandidate(
@@ -327,7 +363,9 @@ class AutoInvestExecutor {
       }
       // Registro de auditoría preliminar de venta (esperado)
       unawaited(
-        ref.read(transactionAuditLoggerProvider).logSellFromPosition(
+        ref
+            .read(transactionAuditLoggerProvider)
+            .logSellFromPosition(
               position: position,
               signature: signature,
               expectedExitSol: expectedSol,
@@ -472,7 +510,9 @@ class AutoInvestExecutor {
           ? null
           : (pnl / position.entrySol) * 100.0;
       unawaited(
-        ref.read(transactionAuditLoggerProvider).logSellFromPosition(
+        ref
+            .read(transactionAuditLoggerProvider)
+            .logSellFromPosition(
               position: position,
               signature: signature,
               expectedExitSol: realizedSol,

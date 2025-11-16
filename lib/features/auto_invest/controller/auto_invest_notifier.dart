@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -49,6 +49,8 @@ class AutoInvestState {
     required this.minReplies,
     required this.maxAgeHours,
     required this.onlyLive,
+    required this.includeManualMints,
+    required this.manualMints,
     this.walletBalanceUpdatedAt,
     this.solPriceUpdatedAt,
     this.statusMessage,
@@ -89,6 +91,8 @@ class AutoInvestState {
     minReplies: 0,
     maxAgeHours: 72,
     onlyLive: false,
+    includeManualMints: false,
+    manualMints: const [],
     walletBalanceUpdatedAt: null,
     solPriceUpdatedAt: null,
   );
@@ -127,6 +131,8 @@ class AutoInvestState {
   final double minReplies;
   final double maxAgeHours;
   final bool onlyLive;
+  final bool includeManualMints;
+  final List<String> manualMints;
   final DateTime? walletBalanceUpdatedAt;
   final DateTime? solPriceUpdatedAt;
   final String? statusMessage;
@@ -169,6 +175,8 @@ class AutoInvestState {
     double? minReplies,
     double? maxAgeHours,
     bool? onlyLive,
+    bool? includeManualMints,
+    List<String>? manualMints,
     DateTime? walletBalanceUpdatedAt,
     DateTime? solPriceUpdatedAt,
     String? statusMessage,
@@ -210,6 +218,8 @@ class AutoInvestState {
       minReplies: minReplies ?? this.minReplies,
       maxAgeHours: maxAgeHours ?? this.maxAgeHours,
       onlyLive: onlyLive ?? this.onlyLive,
+      includeManualMints: includeManualMints ?? this.includeManualMints,
+      manualMints: manualMints ?? this.manualMints,
       walletBalanceUpdatedAt:
           walletBalanceUpdatedAt ?? this.walletBalanceUpdatedAt,
       solPriceUpdatedAt: solPriceUpdatedAt ?? this.solPriceUpdatedAt,
@@ -244,11 +254,14 @@ class AutoInvestState {
     'minReplies': minReplies,
     'maxAgeHours': maxAgeHours,
     'onlyLive': onlyLive,
+    'includeManualMints': includeManualMints,
+    'manualMints': manualMints,
     'walletBalanceUpdatedAt': walletBalanceUpdatedAt?.toIso8601String(),
     'solPriceUpdatedAt': solPriceUpdatedAt?.toIso8601String(),
     'positions': positions.map((p) => p.toJson()).toList(growable: false),
-    'closedPositions':
-        closedPositions.map((p) => p.toJson()).toList(growable: false),
+    'closedPositions': closedPositions
+        .map((p) => p.toJson())
+        .toList(growable: false),
   };
 
   static AutoInvestState fromJson(Map<String, dynamic> json) {
@@ -347,19 +360,34 @@ class AutoInvestState {
         'withdrawnProfitSol',
         initial.withdrawnProfitSol,
       ),
-      walletBalanceSol: readDouble('walletBalanceSol', initial.walletBalanceSol),
+      walletBalanceSol: readDouble(
+        'walletBalanceSol',
+        initial.walletBalanceSol,
+      ),
       solPriceUsd: readDouble('solPriceUsd', initial.solPriceUsd),
       syncBudgetToWallet:
           json['syncBudgetToWallet'] as bool? ?? initial.syncBudgetToWallet,
-      walletBudgetPercent:
-          readDouble('walletBudgetPercent', initial.walletBudgetPercent),
+      walletBudgetPercent: readDouble(
+        'walletBudgetPercent',
+        initial.walletBudgetPercent,
+      ),
       perCoinPercentOfTotal: readDouble(
-          'perCoinPercentOfTotal', initial.perCoinPercentOfTotal),
+        'perCoinPercentOfTotal',
+        initial.perCoinPercentOfTotal,
+      ),
       minReplies: readDouble('minReplies', initial.minReplies),
       maxAgeHours: readDouble('maxAgeHours', initial.maxAgeHours),
       onlyLive: json['onlyLive'] as bool? ?? initial.onlyLive,
+      includeManualMints:
+          json['includeManualMints'] as bool? ?? initial.includeManualMints,
+      manualMints:
+          (json['manualMints'] as List<dynamic>?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          initial.manualMints,
       walletBalanceUpdatedAt:
-          parseDate(json['walletBalanceUpdatedAt']) ?? initial.walletBalanceUpdatedAt,
+          parseDate(json['walletBalanceUpdatedAt']) ??
+          initial.walletBalanceUpdatedAt,
       solPriceUpdatedAt:
           parseDate(json['solPriceUpdatedAt']) ?? initial.solPriceUpdatedAt,
     );
@@ -370,6 +398,7 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
   late final WalletExecutionService walletService;
   late final SimulationAnalysisService analysisService;
   late final AutoInvestStorage storage;
+  Timer? _walletBalanceTimer;
 
   @override
   AutoInvestState build() {
@@ -397,11 +426,48 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
         _setState(state.copyWith(walletAddress: walletAddress));
       });
     }
+    _ensureWalletAutoSync();
+    ref.onDispose(() {
+      _walletBalanceTimer?.cancel();
+      _walletBalanceTimer = null;
+    });
     return initial;
+  }
+
+  void _ensureWalletAutoSync() {
+    _walletBalanceTimer ??= Timer.periodic(const Duration(seconds: 30), (_) {
+      final address = state.walletAddress;
+      if (address != null && address.isNotEmpty) {
+        unawaited(refreshWalletBalance());
+      }
+    });
   }
 
   void toggleEnabled(bool value) {
     _setState(state.copyWith(isEnabled: value));
+  }
+
+  void toggleIncludeManualMints(bool value) {
+    _setState(state.copyWith(includeManualMints: value, clearMessage: true));
+  }
+
+  void addManualMint(String raw) {
+    final mint = raw.trim();
+    if (mint.isEmpty) return;
+    final list = [...state.manualMints];
+    if (list.contains(mint)) return;
+    list.add(mint);
+    _setState(state.copyWith(manualMints: list, clearMessage: true));
+  }
+
+  void removeManualMint(String mint) {
+    final list = state.manualMints.where((m) => m != mint).toList();
+    _setState(state.copyWith(manualMints: list, clearMessage: true));
+  }
+
+  void clearManualMints() {
+    if (state.manualMints.isEmpty) return;
+    _setState(state.copyWith(manualMints: const [], clearMessage: true));
   }
 
   void updateMinMarketCap(double value) {
@@ -427,7 +493,9 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
   void _syncFeaturedFilters({int? minMarketCap, double? minVolume}) {
     try {
       final featuredState = ref.read(featuredCoinProvider);
-      ref.read(featuredCoinProvider.notifier).applyFilters(
+      ref
+          .read(featuredCoinProvider.notifier)
+          .applyFilters(
             minMarketCap: minMarketCap ?? featuredState.minUsdMarketCap,
             minVolume: minVolume ?? featuredState.minVolume24h,
             maxVolume: state.maxVolume24h,
@@ -587,8 +655,8 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
       next = next.copyWith(
         totalBudgetSol: totalFromWallet,
         availableBudgetSol: available,
-        perCoinBudgetSol:
-            (totalFromWallet * next.perCoinPercentOfTotal).toDouble(),
+        perCoinBudgetSol: (totalFromWallet * next.perCoinPercentOfTotal)
+            .toDouble(),
       );
     }
     _setState(next);
@@ -820,6 +888,23 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     );
   }
 
+  void resetResults() {
+    _setState(
+      state.copyWith(
+        executions: const [],
+        simulations: const [],
+        closedPositions: const [],
+        analysisSummary: null,
+        isAnalyzingResults: false,
+        clearMessage: true,
+      ),
+    );
+    _setState(
+      state.copyWith(statusMessage: 'Resultados reiniciados.'),
+      persist: false,
+    );
+  }
+
   void recordPositionEntry({
     required String mint,
     required String symbol,
@@ -1025,5 +1110,3 @@ final autoInvestProvider =
     NotifierProvider<AutoInvestNotifier, AutoInvestState>(
       AutoInvestNotifier.new,
     );
-
-

@@ -41,6 +41,8 @@ class AutoInvestPage extends ConsumerWidget {
             const SizedBox(height: 16),
             _FilterSection(state: state, notifier: notifier),
             const SizedBox(height: 16),
+            _ManualMintsSection(state: state, notifier: notifier),
+            const SizedBox(height: 16),
             _RiskSection(state: state, notifier: notifier),
             const SizedBox(height: 16),
             _ExecutionModeSection(state: state, notifier: notifier),
@@ -361,6 +363,103 @@ class _FilterSection extends StatelessWidget {
               'Restringe a memecoins con bonding curve activa.',
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ManualMintsSection extends StatefulWidget {
+  const _ManualMintsSection({required this.state, required this.notifier});
+  final AutoInvestState state;
+  final AutoInvestNotifier notifier;
+  @override
+  State<_ManualMintsSection> createState() => _ManualMintsSectionState();
+}
+
+class _ManualMintsSectionState extends State<_ManualMintsSection> {
+  late final TextEditingController _controller;
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final state = widget.state;
+    final notifier = widget.notifier;
+    return SoftSurface(
+      color: theme.colorScheme.surface,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _SectionHeader(
+            icon: Icons.playlist_add,
+            title: 'Mints manuales',
+            subtitle: 'Incluye direcciones de mint adicionales a Featured',
+          ),
+          const SizedBox(height: 14),
+          SwitchListTile.adaptive(
+            value: state.includeManualMints,
+            onChanged: notifier.toggleIncludeManualMints,
+            title: const Text('Incluir mints manuales en la selección'),
+            subtitle: const Text(
+              'No excluye Featured; solo agrega estas direcciones',
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _controller,
+                  decoration: const InputDecoration(
+                    labelText: 'Mint address (Solana)',
+                    hintText: 'Ej: So11111111111111111111111111111111111111112',
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              FilledButton.icon(
+                onPressed: () {
+                  final v = _controller.text.trim();
+                  if (v.isNotEmpty) {
+                    notifier.addManualMint(v);
+                    _controller.clear();
+                  }
+                },
+                icon: const Icon(Icons.add),
+                label: const Text('Agregar'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (state.manualMints.isNotEmpty)
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: state.manualMints
+                  .map(
+                    (m) => Chip(
+                      label: Text(m),
+                      onDeleted: () => notifier.removeManualMint(m),
+                    ),
+                  )
+                  .toList(),
+            )
+          else
+            Text(
+              'Aún no agregaste mints manuales.',
+              style: theme.textTheme.bodySmall,
+            ),
         ],
       ),
     );

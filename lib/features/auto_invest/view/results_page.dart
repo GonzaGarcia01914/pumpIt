@@ -67,6 +67,41 @@ class _SimulationResultsPageState extends ConsumerState<SimulationResultsPage> {
     Widget buildMainList({required bool includeAnalysis}) {
       final children = <Widget>[];
       children
+        ..add(
+          Align(
+            alignment: Alignment.centerRight,
+            child: OutlinedButton.icon(
+              icon: const Icon(Icons.refresh),
+              label: const Text('Reset resultados'),
+              onPressed: () async {
+                final confirmed =
+                    await showDialog<bool>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('Resetear resultados'),
+                        content: const Text(
+                          'Esto limpia simulaciones, ejecuciones y cerradas solo en la app.\nEl archivo CSV no se toca.',
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.of(ctx).pop(false),
+                            child: const Text('Cancelar'),
+                          ),
+                          FilledButton(
+                            onPressed: () => Navigator.of(ctx).pop(true),
+                            child: const Text('Resetear'),
+                          ),
+                        ],
+                      ),
+                    ) ??
+                    false;
+                if (confirmed) {
+                  notifier.resetResults();
+                }
+              },
+            ),
+          ),
+        )
         ..add(_ResultsOverview(state: state))
         ..add(const SizedBox(height: 24));
       if (hasPositions) {
@@ -271,6 +306,7 @@ class _ResultsOverview extends StatelessWidget {
             'Entrada ${_formatSol(entryFees, solPrice)} | Salida ${_formatSol(exitFees, solPrice)}',
         accent: theme.colorScheme.tertiary,
         tone: cardGray,
+        valueColor: Colors.white,
       ),
       _MetricData(
         icon: Icons.wifi_tethering,
@@ -354,6 +390,7 @@ class _MetricData {
     this.caption,
     this.accent,
     this.tone,
+    this.valueColor,
   });
 
   final IconData icon;
@@ -362,6 +399,7 @@ class _MetricData {
   final String? caption;
   final Color? accent;
   final Color? tone;
+  final Color? valueColor;
 }
 
 class _MetricCard extends StatelessWidget {
@@ -398,7 +436,9 @@ class _MetricCard extends StatelessWidget {
           const SizedBox(height: 8),
           Text(
             data.value,
-            style: theme.textTheme.headlineSmall?.copyWith(color: accent),
+            style: theme.textTheme.headlineSmall?.copyWith(
+              color: data.valueColor ?? accent,
+            ),
           ),
           if (data.caption != null) ...[
             const SizedBox(height: 4),

@@ -10,21 +10,45 @@ import '../models/position.dart';
 class TransactionAuditLogger {
   TransactionAuditLogger();
 
+  static const List<String> _headerColumns = [
+    'timestamp',
+    'side',
+    'symbol',
+    'name',
+    'mint',
+    'mode',
+    'entry_sol',
+    'exit_sol',
+    'token_amount',
+    'entry_price_sol',
+    'exit_price_sol',
+    'pnl_sol',
+    'pnl_percent',
+    'tx_signature',
+    'solscan_url',
+    'marketcap_sol',
+    'usd_market_cap',
+    'created_at',
+    'last_reply_at',
+    'reply_count',
+    'twitter',
+    'telegram',
+    'website',
+  ];
+
   io.File _resolveFile() {
     // Same folder as the running process (best-effort on desktop/dev runs)
     final dir = io.Directory.current.path;
-    final path = dir + io.Platform.pathSeparator + 'resutls.csv';
+    final path = dir + io.Platform.pathSeparator + 'results.csv';
     return io.File(path);
   }
+
+  String get _delimiter => io.Platform.isWindows ? ';' : ',';
 
   Future<void> _ensureHeader(io.File file) async {
     if (!await file.exists()) {
       await file.create(recursive: true);
-      await file.writeAsString(
-        'timestamp,side,symbol,name,mint,mode,entry_sol,exit_sol,token_amount,entry_price_sol,exit_price_sol,pnl_sol,pnl_percent,tx_signature,solscan_url,marketcap_sol,usd_market_cap,created_at,last_reply_at,reply_count,twitter,telegram,website\n',
-        mode: io.FileMode.write,
-        flush: true,
-      );
+      await _writeRow(file, _headerColumns, append: false);
     }
   }
 
@@ -34,6 +58,19 @@ class TransactionAuditLogger {
       return '"' + v.replaceAll('"', '""') + '"';
     }
     return v;
+  }
+
+  Future<void> _writeRow(
+    io.File file,
+    List<String?> values, {
+    bool append = true,
+  }) async {
+    final joined = values.map(_csv).join(_delimiter);
+    await file.writeAsString(
+      '$joined\n',
+      mode: append ? io.FileMode.append : io.FileMode.write,
+      flush: true,
+    );
   }
 
   Future<void> logBuyFromFeatured({
@@ -71,8 +108,8 @@ class TransactionAuditLogger {
       coin.twitterUrl?.toString() ?? '',
       coin.telegramUrl?.toString() ?? '',
       coin.websiteUrl?.toString() ?? '',
-    ].map(_csv).join(',');
-    await file.writeAsString(row + '\n', mode: io.FileMode.append, flush: true);
+    ];
+    await _writeRow(file, row);
   }
 
   Future<void> logSellFromPosition({
@@ -112,12 +149,11 @@ class TransactionAuditLogger {
       reason?.label ?? '',
       '',
       '',
-    ].map(_csv).join(',');
-    await file.writeAsString(row + '\n', mode: io.FileMode.append, flush: true);
+    ];
+    await _writeRow(file, row);
   }
 }
 
 final transactionAuditLoggerProvider = Provider<TransactionAuditLogger>((ref) {
   return TransactionAuditLogger();
 });
-
