@@ -21,10 +21,14 @@ class AutoInvestPositionMonitor {
   final Map<String, DateTime> _sellLastAttempt = {};
 
   static const _interval = Duration(seconds: 1);
+  static const _maxMissingPerTick = 2;
+  static const _maxPositionsPerTick = 3;
   static const _errorCooldownDuration = Duration(minutes: 2);
-  static const _sellRetryDelay = Duration(seconds: 3);
+  static const _sellRetryDelay = Duration(seconds: 5);
   static const _sellMaxAttempts = 5;
   static const _sellStuckSince = Duration(seconds: 12);
+
+  int _nextPositionIndex = 0;
 
   void init() {
     ref.listen<AutoInvestState>(
@@ -43,7 +47,7 @@ class AutoInvestPositionMonitor {
   }
 
   bool _shouldMonitor(AutoInvestState state) =>
-      state.positions.any((position) => position.hasTokenAmount);
+      state.positions.isNotEmpty;
 
   void _start() {
     _timer ??= Timer.periodic(_interval, (_) => _tick());
@@ -57,12 +61,28 @@ class AutoInvestPositionMonitor {
 
   Future<void> _tick() async {
     if (_tickInProgress) return;
-    final state = ref.read(autoInvestProvider);
+    var state = ref.read(autoInvestProvider);
+    final missing = state.positions
+        .where((position) => !position.hasTokenAmount)
+        .toList(growable: false);
+    if (missing.isNotEmpty) {
+      final executor = ref.read(autoInvestExecutorProvider);
+      for (final position in missing.take(_maxMissingPerTick)) {
+        try {
+          await executor.ensurePositionTokenAmount(position);
+        } catch (_) {
+          // Ignore, se reintenta en el siguiente ciclo.
+        }
+      }
+      state = ref.read(autoInvestProvider);
+    }
     final positions = state.positions
         .where((position) => position.hasTokenAmount)
         .toList(growable: false);
     if (positions.isEmpty) {
-      _stop();
+      if (state.positions.isEmpty) {
+        _stop();
+      }
       return;
     }
     // Limpia intentos antiguos de posiciones ya cerradas
@@ -71,9 +91,16 @@ class AutoInvestPositionMonitor {
     _sellLastAttempt.removeWhere((k, v) => !sigs.contains(k));
     _tickInProgress = true;
     try {
-      for (final position in positions) {
-        await _updatePosition(position, state);
+      final total = positions.length;
+      final count = total <= _maxPositionsPerTick
+          ? total
+          : _maxPositionsPerTick;
+      for (var i = 0; i < count; i++) {
+        final index = (_nextPositionIndex + i) % total;
+        await _updatePosition(positions[index], state);
       }
+      _nextPositionIndex =
+          (_nextPositionIndex + count) % total;
     } finally {
       _tickInProgress = false;
     }

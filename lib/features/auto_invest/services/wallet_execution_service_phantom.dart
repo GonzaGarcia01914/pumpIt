@@ -68,6 +68,22 @@ class WalletExecutionService {
     return null;
   }
 
+  Future<double?> readTokenBalance({
+    required String owner,
+    required String mint,
+  }) async {
+    // Sin RPC disponible en web, devolvemos null.
+    return null;
+  }
+
+  Future<double?> readSolChangeFromTransaction({
+    required String signature,
+    required String owner,
+  }) async {
+    // Sin RPC disponible en web, no se puede leer el delta real.
+    return null;
+  }
+
   Future<int> getMintDecimals(String mint) async => 6;
 
   Future<double?> getWalletBalance(String address) async => null;

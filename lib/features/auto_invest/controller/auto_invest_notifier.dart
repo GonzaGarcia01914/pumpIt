@@ -1017,6 +1017,7 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     required double solAmount,
     required String txSignature,
     required AutoInvestExecutionMode executionMode,
+    bool subtractBudget = true,
   }) {
     final existing = state.positions
         .where((position) => position.entrySignature != txSignature)
@@ -1031,15 +1032,36 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
         executionMode: executionMode,
       ),
     );
+    var nextAvailable = state.availableBudgetSol;
+    if (subtractBudget) {
+      nextAvailable -= solAmount;
+      if (nextAvailable < 0) {
+        nextAvailable = 0;
+      } else if (nextAvailable > state.totalBudgetSol) {
+        nextAvailable = state.totalBudgetSol;
+      }
+    }
+    _setState(
+      state.copyWith(positions: existing, availableBudgetSol: nextAvailable),
+    );
+  }
+
+  void reserveBudgetForEntry(double solAmount) {
     var nextAvailable = state.availableBudgetSol - solAmount;
     if (nextAvailable < 0) {
       nextAvailable = 0;
     } else if (nextAvailable > state.totalBudgetSol) {
       nextAvailable = state.totalBudgetSol;
     }
-    _setState(
-      state.copyWith(positions: existing, availableBudgetSol: nextAvailable),
-    );
+    _setState(state.copyWith(availableBudgetSol: nextAvailable));
+  }
+
+  void releaseBudgetReservation(double solAmount) {
+    var nextAvailable = state.availableBudgetSol + solAmount;
+    if (nextAvailable > state.totalBudgetSol) {
+      nextAvailable = state.totalBudgetSol;
+    }
+    _setState(state.copyWith(availableBudgetSol: nextAvailable));
   }
 
   bool removePosition(
@@ -1196,27 +1218,41 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     DateTime? alertTriggeredAt,
     bool updateAlert = false,
   }) {
-    final updated = state.positions
-        .map((position) {
-          if (position.entrySignature != txSignature) {
-            return position;
-          }
-          var next = position.copyWith(
-            lastPriceSol: priceSol,
-            currentValueSol: currentValueSol,
-            pnlSol: pnlSol,
-            pnlPercent: pnlPercent,
-            lastCheckedAt: checkedAt,
-          );
-          if (updateAlert) {
-            next = next.copyWith(
-              alertType: alertType,
-              alertTriggeredAt: alertTriggeredAt,
-            );
-          }
-          return next;
-        })
-        .toList(growable: false);
+    final positions = state.positions;
+    final index = positions.indexWhere(
+      (position) => position.entrySignature == txSignature,
+    );
+    if (index < 0) return;
+    final current = positions[index];
+
+    final bool alertChanged = updateAlert &&
+        (current.alertType != alertType ||
+            current.alertTriggeredAt != alertTriggeredAt);
+    final bool metricsChanged =
+        current.lastPriceSol != priceSol ||
+        current.currentValueSol != currentValueSol ||
+        current.pnlSol != pnlSol ||
+        (current.pnlPercent ?? double.nan) != (pnlPercent ?? double.nan);
+
+    if (!alertChanged && !metricsChanged) {
+      return;
+    }
+
+    var next = current.copyWith(
+      lastPriceSol: priceSol,
+      currentValueSol: currentValueSol,
+      pnlSol: pnlSol,
+      pnlPercent: pnlPercent,
+      lastCheckedAt: checkedAt,
+    );
+    if (updateAlert) {
+      next = next.copyWith(
+        alertType: alertType,
+        alertTriggeredAt: alertTriggeredAt,
+      );
+    }
+    final updated = [...positions];
+    updated[index] = next;
     _setState(state.copyWith(positions: updated));
   }
 

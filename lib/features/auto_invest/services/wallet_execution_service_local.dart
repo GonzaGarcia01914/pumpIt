@@ -110,6 +110,30 @@ class WalletExecutionService {
     }
   }
 
+  Future<double?> readTokenBalance({
+    required String owner,
+    required String mint,
+  }) async {
+    try {
+      return await _fetchTokenBalance(owner: owner, mint: mint);
+    } catch (error) {
+      throw Exception('Lectura de balance SPL falló: $error');
+    }
+  }
+
+  Future<double?> readSolChangeFromTransaction({
+    required String signature,
+    required String owner,
+  }) async {
+    try {
+      final result = await _fetchTransactionResult(signature);
+      if (result == null) return null;
+      return _readSolChangeFromResult(result, owner);
+    } catch (error) {
+      throw Exception('Lectura de delta de SOL falló: $error');
+    }
+  }
+
   Future<int> getMintDecimals(String mint) async {
     final cached = _mintDecimalsCache[mint];
     if (cached != null) return cached;
@@ -279,6 +303,55 @@ class WalletExecutionService {
     return _computeTokenDelta(pre, post);
   }
 
+  Future<double?> _fetchTokenBalance({
+    required String owner,
+    required String mint,
+  }) async {
+    final response = await http.post(
+      Uri.parse(_rpcUrl),
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'jsonrpc': '2.0',
+        'id': 'auto-invest-balance',
+        'method': 'getTokenAccountsByOwner',
+        'params': [
+          owner,
+          {'mint': mint},
+          {
+            'encoding': 'jsonParsed',
+            'commitment': 'confirmed',
+          },
+        ],
+      }),
+    );
+    if (response.statusCode != 200) {
+      throw Exception('RPC respondi? ${response.statusCode}: ${response.body}');
+    }
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map<String, dynamic>) {
+      throw Exception('Respuesta RPC inv?lida.');
+    }
+    final value = decoded['result'];
+    if (value is! Map<String, dynamic>) {
+      return null;
+    }
+    final accounts = value['value'];
+    if (accounts is! List) return null;
+    for (final entry in accounts) {
+      if (entry is! Map<String, dynamic>) continue;
+      final account = entry['account'] as Map<String, dynamic>?;
+      final data = account?['data'] as Map<String, dynamic>?;
+      final parsed = data?['parsed'] as Map<String, dynamic>?;
+      final info = parsed?['info'] as Map<String, dynamic>?;
+      final tokenAmount = info?['tokenAmount'];
+      final amount = _parseTokenAccountAmount(tokenAmount);
+      if (amount != null) {
+        return amount;
+      }
+    }
+    return null;
+  }
+
   Future<Map<String, dynamic>?> _fetchTransactionResult(
     String signature,
   ) async {
@@ -316,6 +389,39 @@ class WalletExecutionService {
       return result;
     }
     throw Exception('Formato de transacciÃ³n desconocido.');
+  }
+
+  double? _readSolChangeFromResult(
+    Map<String, dynamic> result,
+    String owner,
+  ) {
+    final meta = result['meta'] as Map<String, dynamic>?;
+    final transaction = result['transaction'] as Map<String, dynamic>?;
+    if (meta == null || transaction == null) {
+      return null;
+    }
+    final accountKeys = _extractAccountKeys(result);
+    if (accountKeys == null) {
+      return null;
+    }
+    final ownerIndex = _accountIndex(owner, accountKeys);
+    if (ownerIndex == null) {
+      return null;
+    }
+    final preBalances = meta['preBalances'] as List<dynamic>?;
+    final postBalances = meta['postBalances'] as List<dynamic>?;
+    if (preBalances == null ||
+        postBalances == null ||
+        ownerIndex >= preBalances.length ||
+        ownerIndex >= postBalances.length) {
+      return null;
+    }
+    final preLamports = _lamportsFromDynamic(preBalances[ownerIndex]);
+    final postLamports = _lamportsFromDynamic(postBalances[ownerIndex]);
+    if (preLamports == null || postLamports == null) {
+      return null;
+    }
+    return (postLamports - preLamports) / _lamportsPerSol;
   }
 
   List<dynamic>? _extractAccountKeys(Map<String, dynamic>? txResult) {
@@ -376,6 +482,54 @@ class WalletExecutionService {
       return entry;
     }
     return null;
+  }
+
+  int? _accountIndex(String owner, List<dynamic>? accountKeys) {
+    if (accountKeys == null) return null;
+    for (var i = 0; i < accountKeys.length; i++) {
+      final entry = accountKeys[i];
+      String? pubkey;
+      if (entry is Map<String, dynamic>) {
+        final raw = entry['pubkey'];
+        if (raw is String && raw.isNotEmpty) {
+          pubkey = raw;
+        }
+      } else if (entry is String && entry.isNotEmpty) {
+        pubkey = entry;
+      }
+      if (pubkey == owner) {
+        return i;
+      }
+    }
+    return null;
+  }
+
+  double? _lamportsFromDynamic(dynamic value) {
+    if (value == null) return null;
+    if (value is int) {
+      return value.toDouble();
+    }
+    if (value is num) {
+      return value.toDouble();
+    }
+    return double.tryParse(value.toString());
+  }
+
+  double? _parseTokenAccountAmount(dynamic raw) {
+    if (raw is! Map<String, dynamic>) return null;
+    final uiString = raw['uiAmountString']?.toString();
+    if (uiString != null) {
+      final maybeUi = double.tryParse(uiString);
+      if (maybeUi != null) {
+        return maybeUi;
+      }
+    }
+    final amountString = raw['amount']?.toString();
+    if (amountString == null) return null;
+    final rawAmount = double.tryParse(amountString);
+    if (rawAmount == null) return null;
+    final decimals = (raw['decimals'] as num?)?.toDouble() ?? 0;
+    return rawAmount / math.pow(10, decimals);
   }
 
   double? _parseDynamicUiAmount(dynamic raw) {

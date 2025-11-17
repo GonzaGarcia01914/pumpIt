@@ -25,12 +25,18 @@ class PumpFunQuote {
     required this.marketCapSol,
     required this.liquiditySol,
     required this.fetchedAt,
+    required this.isComplete,
+    this.raydiumPool,
   });
 
   final double priceSol;
   final double? marketCapSol;
   final double? liquiditySol;
   final DateTime fetchedAt;
+  final bool isComplete;
+  final String? raydiumPool;
+
+  bool get isGraduated => isComplete || (raydiumPool?.isNotEmpty ?? false);
 
   static double? _maybeDouble(dynamic value) {
     if (value == null) return null;
@@ -94,6 +100,8 @@ class PumpFunQuote {
         orElse: () => null,
       ),
       fetchedAt: fetchedAt,
+      isComplete: json['complete'] as bool? ?? false,
+      raydiumPool: json['raydium_pool']?.toString(),
     );
   }
 }

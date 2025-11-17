@@ -22,6 +22,20 @@ class WalletExecutionService {
     return null;
   }
 
+  Future<double?> readTokenBalance({
+    required String owner,
+    required String mint,
+  }) async {
+    return null;
+  }
+
+  Future<double?> readSolChangeFromTransaction({
+    required String signature,
+    required String owner,
+  }) async {
+    return null;
+  }
+
   Future<int> getMintDecimals(String mint) async => 6;
 
   Future<double?> getWalletBalance(String address) async => null;

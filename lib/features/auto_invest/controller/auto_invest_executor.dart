@@ -17,6 +17,14 @@ import '../services/transaction_audit_logger.dart';
 import 'auto_invest_notifier.dart';
 
 const _lamportsPerSol = 1000000000;
+const _tokenRefreshCooldown = Duration(seconds: 10);
+
+const _jupiterMaxLamports = 5000000000;
+const _jupiterMaxSol = _jupiterMaxLamports / _lamportsPerSol;
+const _rentExemptionBufferSol = 0.003;
+const _walletBalanceThrottle = Duration(seconds: 5);
+const _walletInsufficientRetryDelay = Duration(seconds: 12);
+const _autoSellRetryDelay = Duration(seconds: 5);
 
 class AutoInvestExecutor {
   AutoInvestExecutor(
@@ -34,18 +42,76 @@ class AutoInvestExecutor {
   final PumpFunPriceService priceService;
 
   bool _isRunning = false;
+  bool _rerunPending = false;
   final Map<String, DateTime> _recentMints = {};
+  final Map<String, _PendingBuy> _pendingBuys = {};
+  final Set<String> _pendingMints = {};
   final Set<String> _positionsSelling = {};
+  final Map<String, DateTime> _tokenAmountRequests = {};
+  final Set<String> _pendingAutoSellRetries = {};
+  DateTime? _lastWalletBalanceCheck;
+  double? _lastWalletBalanceSol;
+  DateTime? _walletInsufficientUntil;
+  String? _lastWalletWarning;
 
   void init() {
     ref.listen<AutoInvestState>(
       autoInvestProvider,
-      (_, __) => _scheduleCheck(),
+      (previous, next) {
+        if (_shouldScheduleFromAutoInvest(previous, next)) {
+          _scheduleCheck();
+        }
+      },
     );
     ref.listen<FeaturedCoinState>(
       featuredCoinProvider,
       (_, __) => _scheduleCheck(),
     );
+  }
+
+  bool _shouldScheduleFromAutoInvest(
+    AutoInvestState? previous,
+    AutoInvestState next,
+  ) {
+    if (!next.isEnabled || next.walletAddress == null) {
+      return false;
+    }
+    if (previous == null) {
+      return true;
+    }
+    if (!previous.isEnabled && next.isEnabled) {
+      return true;
+    }
+    if (previous.walletAddress != next.walletAddress) {
+      return true;
+    }
+    if (previous.positions.length != next.positions.length) {
+      return true;
+    }
+    if (previous.availableBudgetSol != next.availableBudgetSol ||
+        previous.totalBudgetSol != next.totalBudgetSol ||
+        previous.perCoinBudgetSol != next.perCoinBudgetSol) {
+      return true;
+    }
+    if (previous.executionMode != next.executionMode) {
+      return true;
+    }
+    if (previous.includeManualMints != next.includeManualMints) {
+      return true;
+    }
+    if (!listEquals(previous.manualMints, next.manualMints)) {
+      return true;
+    }
+    if (previous.minMarketCap != next.minMarketCap ||
+        previous.maxMarketCap != next.maxMarketCap ||
+        previous.minVolume24h != next.minVolume24h ||
+        previous.maxVolume24h != next.maxVolume24h ||
+        previous.minReplies != next.minReplies ||
+        previous.maxAgeHours != next.maxAgeHours ||
+        previous.preferNewest != next.preferNewest) {
+      return true;
+    }
+    return false;
   }
 
   void _scheduleCheck() {
@@ -58,6 +124,7 @@ class AutoInvestExecutor {
       return;
     }
     if (_isRunning) {
+      _rerunPending = true;
       return;
     }
     _isRunning = true;
@@ -66,6 +133,10 @@ class AutoInvestExecutor {
         await _evaluate();
       } finally {
         _isRunning = false;
+        if (_rerunPending) {
+          _rerunPending = false;
+          _scheduleCheck();
+        }
       }
     });
   }
@@ -131,9 +202,28 @@ class AutoInvestExecutor {
       return;
     }
 
-    final lamports = (autoState.perCoinBudgetSol * _lamportsPerSol)
-        .round()
-        .clamp(1, 5000000000);
+    var requestedLamports = (autoState.perCoinBudgetSol * _lamportsPerSol)
+        .round();
+    if (requestedLamports < 1) {
+      requestedLamports = 1;
+    }
+    if (autoState.executionMode == AutoInvestExecutionMode.jupiter &&
+        requestedLamports > _jupiterMaxLamports) {
+      ref
+          .read(autoInvestProvider.notifier)
+          .setStatus(
+            'Presupuesto por meme ('
+            '${autoState.perCoinBudgetSol.toStringAsFixed(3)} SOL) supera el l�mite de '
+            '${_jupiterMaxSol.toStringAsFixed(2)} SOL permitido por Jupiter. '
+            'Reduce el presupuesto por meme a ${_jupiterMaxSol.toStringAsFixed(2)} SOL o menos.',
+          );
+      return;
+    }
+    final lamports = math.max(1, requestedLamports);
+    final entrySolUsed =
+        autoState.executionMode == AutoInvestExecutionMode.jupiter
+        ? lamports / _lamportsPerSol
+        : autoState.perCoinBudgetSol;
     if (autoState.executionMode == AutoInvestExecutionMode.pumpPortal) {
       final minBudget = math.max(0.01, autoState.pumpPriorityFeeSol + 0.003);
       if (autoState.perCoinBudgetSol < minBudget) {
@@ -148,14 +238,26 @@ class AutoInvestExecutor {
       }
     }
 
-    ref
-        .read(autoInvestProvider.notifier)
-        .setStatus(
+    final totalRequiredSol = _totalWalletRequirement(autoState, entrySolUsed);
+    final hasWalletSol = await _hasEnoughWalletSol(
+      autoState: autoState,
+      entrySol: entrySolUsed,
+      totalRequiredSol: totalRequiredSol,
+    );
+    if (!hasWalletSol) {
+      return;
+    }
+
+    notifier.setStatus(
           autoState.executionMode == AutoInvestExecutionMode.jupiter
-              ? 'Preparando compra automática de ${candidate.symbol} (${autoState.perCoinBudgetSol} SOL) vía Jupiter.'
-              : 'Preparando compra automática de ${candidate.symbol} (${autoState.perCoinBudgetSol} SOL) vía PumpPortal.',
+              ? 'Preparando compra automática de ${candidate.symbol} (${entrySolUsed.toStringAsFixed(4)} SOL) vía Jupiter.'
+              : 'Preparando compra automática de ${candidate.symbol} (${entrySolUsed.toStringAsFixed(4)} SOL) vía PumpPortal.',
         );
+    var budgetReserved = false;
+    String? pendingSignature;
     try {
+      notifier.reserveBudgetForEntry(entrySolUsed);
+      budgetReserved = true;
       // Precio de referencia al momento de la entrada (SOL por token)
       final pumpQuote = await priceService.fetchQuote(candidate.mint);
       final signature = switch (autoState.executionMode) {
@@ -169,6 +271,15 @@ class AutoInvestExecutor {
           candidate,
         ),
       };
+      pendingSignature = signature;
+      final pending = _PendingBuy(
+        mint: candidate.mint,
+        symbol: candidate.symbol,
+        solAmount: entrySolUsed,
+        executionMode: autoState.executionMode,
+      );
+      _pendingBuys[signature] = pending;
+      _pendingMints.add(candidate.mint);
       // Registro de auditoría (CSV) para compras
       unawaited(
         ref
@@ -176,38 +287,35 @@ class AutoInvestExecutor {
             .logBuyFromFeatured(
               coin: candidate,
               signature: signature,
-              entrySol: autoState.perCoinBudgetSol,
+              entrySol: entrySolUsed,
               mode: autoState.executionMode,
               entryPriceSol: pumpQuote.priceSol,
             ),
       );
-      final notifier = ref.read(autoInvestProvider.notifier);
       notifier.recordExecution(
         ExecutionRecord(
           mint: candidate.mint,
           symbol: candidate.symbol,
-          solAmount: autoState.perCoinBudgetSol,
+          solAmount: entrySolUsed,
           side: 'buy',
           txSignature: signature,
           executedAt: DateTime.now(),
         ),
       );
-      notifier.recordPositionEntry(
-        mint: candidate.mint,
-        symbol: candidate.symbol,
-        solAmount: autoState.perCoinBudgetSol,
-        txSignature: signature,
-        executionMode: autoState.executionMode,
-      );
       unawaited(
         _trackConfirmation(signature, candidate.symbol, candidate.mint),
       );
-      _recentMints[candidate.mint] = DateTime.now();
     } catch (error) {
-      ref
-          .read(autoInvestProvider.notifier)
-          .recordExecutionError(candidate.symbol, error.toString());
-      _recentMints[candidate.mint] = DateTime.now();
+      if (pendingSignature != null) {
+        final pending = _consumePendingBuy(pendingSignature);
+        if (pending != null) {
+          notifier.releaseBudgetReservation(pending.solAmount);
+          _recentMints.remove(pending.mint);
+        }
+      } else if (budgetReserved) {
+        notifier.releaseBudgetReservation(entrySolUsed);
+      }
+      notifier.recordExecutionError(candidate.symbol, error.toString());
     }
   }
 
@@ -217,7 +325,7 @@ class AutoInvestExecutor {
     for (final mint in autoState.manualMints) {
       final m = mint.trim();
       if (m.isEmpty) continue;
-      if (_recentMints.containsKey(m)) continue;
+      if (_isMintBlocked(m)) continue;
       if (heldMints.contains(m)) continue;
       // Build a lightweight candidate; filters will be skipped for manual entries
       return FeaturedCoin(
@@ -241,6 +349,9 @@ class AutoInvestExecutor {
     }
     return null;
   }
+
+  bool _isMintBlocked(String mint) =>
+      _recentMints.containsKey(mint) || _pendingMints.contains(mint);
 
   _ScanReport _scanFeaturedCoins(
     List<FeaturedCoin> coins,
@@ -279,7 +390,7 @@ class AutoInvestExecutor {
         filteredByHeld++;
         continue;
       }
-      if (_recentMints.containsKey(coin.mint)) {
+      if (_isMintBlocked(coin.mint)) {
         filteredByCooldown++;
         continue;
       }
@@ -401,11 +512,127 @@ class AutoInvestExecutor {
     return value.toString();
   }
 
+  double _totalWalletRequirement(
+    AutoInvestState autoState,
+    double entrySol,
+  ) {
+    final buffer =
+        autoState.executionMode == AutoInvestExecutionMode.pumpPortal
+            ? autoState.pumpPriorityFeeSol + _rentExemptionBufferSol
+            : _rentExemptionBufferSol;
+    return entrySol + buffer;
+  }
+
+  Future<bool> _hasEnoughWalletSol({
+    required AutoInvestState autoState,
+    required double entrySol,
+    required double totalRequiredSol,
+  }) async {
+    _syncWalletBalanceSnapshot(autoState);
+    final walletAddress = autoState.walletAddress;
+    if (walletAddress == null) {
+      return false;
+    }
+    final now = DateTime.now();
+    final cachedBalance = _lastWalletBalanceSol;
+    final lastCheck = _lastWalletBalanceCheck;
+    final hasFreshCache = cachedBalance != null &&
+        lastCheck != null &&
+        now.difference(lastCheck) <= _walletBalanceThrottle;
+    if (hasFreshCache && cachedBalance! >= totalRequiredSol) {
+      _lastWalletWarning = null;
+      _walletInsufficientUntil = null;
+      return true;
+    }
+    if (_walletInsufficientUntil != null &&
+        now.isBefore(_walletInsufficientUntil!)) {
+      return false;
+    }
+    double? balance;
+    if (hasFreshCache) {
+      balance = cachedBalance;
+    } else {
+      balance = await _readWalletBalance(walletAddress);
+    }
+    if (balance == null) {
+      _walletInsufficientUntil = now.add(_walletInsufficientRetryDelay);
+      final message =
+          'No se pudo leer el saldo de la wallet; se cancela la entrada automática.';
+      if (_lastWalletWarning != message) {
+        ref.read(autoInvestProvider.notifier).setStatus(message);
+        _lastWalletWarning = message;
+      }
+      return false;
+    }
+    if (balance >= totalRequiredSol) {
+      _lastWalletWarning = null;
+      _walletInsufficientUntil = null;
+      _lastWalletBalanceSol = balance;
+      return true;
+    }
+    return _handleInsufficientWallet(
+      balance: balance,
+      entrySol: entrySol,
+      totalRequiredSol: totalRequiredSol,
+      now: now,
+    );
+  }
+
+  Future<double?> _readWalletBalance(String walletAddress) async {
+    _lastWalletBalanceCheck = DateTime.now();
+    try {
+      final balance = await wallet.getWalletBalance(walletAddress);
+      if (balance != null) {
+        _lastWalletBalanceSol = balance;
+        return balance;
+      }
+    } catch (_) {
+      // Ignorar y reutilizar la instantánea anterior
+    }
+    return _lastWalletBalanceSol;
+  }
+
+  bool _handleInsufficientWallet({
+    required double balance,
+    required double entrySol,
+    required double totalRequiredSol,
+    required DateTime now,
+  }) {
+    _walletInsufficientUntil = now.add(_walletInsufficientRetryDelay);
+    _lastWalletBalanceSol = balance;
+    final message =
+        'Saldo disponible (${balance.toStringAsFixed(4)} SOL) insuficiente para una nueva entrada '
+        'de ${entrySol.toStringAsFixed(4)} SOL (se requieren ~${totalRequiredSol.toStringAsFixed(4)} SOL incluyendo fees).';
+    if (_lastWalletWarning != message) {
+      ref.read(autoInvestProvider.notifier).setStatus(message);
+      _lastWalletWarning = message;
+    }
+    return false;
+  }
+
+  void _syncWalletBalanceSnapshot(AutoInvestState state) {
+    final updatedAt = state.walletBalanceUpdatedAt;
+    if (updatedAt == null) return;
+    if (_lastWalletBalanceCheck == null ||
+        updatedAt.isAfter(_lastWalletBalanceCheck!)) {
+      _lastWalletBalanceCheck = updatedAt;
+      _lastWalletBalanceSol = state.walletBalanceSol;
+      _walletInsufficientUntil = null;
+      _lastWalletWarning = null;
+    }
+  }
+
+  void _resetWalletBalanceCache() {
+    _lastWalletBalanceCheck = null;
+    _lastWalletBalanceSol = null;
+    _walletInsufficientUntil = null;
+    _lastWalletWarning = null;
+  }
+
   void _cleanupRecent() {
     final cutoff = DateTime.now().subtract(const Duration(minutes: 15));
     _recentMints.removeWhere((_, time) => time.isBefore(cutoff));
   }
-
 
   void _cleanupFailedEntries(AutoInvestState state) {
     if (state.executions.isEmpty || state.positions.isEmpty) {
@@ -427,13 +654,117 @@ class AutoInvestExecutor {
         refundBudget: true,
       );
       if (removed) {
-        _recentMints.remove(mint);
+        _recentMints[mint] = DateTime.now();
         failedBuys.remove(position.entrySignature);
       }
       if (failedBuys.isEmpty) {
         break;
       }
     }
+  }
+
+  _PendingBuy? _consumePendingBuy(String signature) {
+    final pending = _pendingBuys.remove(signature);
+    if (pending != null) {
+      _pendingMints.remove(pending.mint);
+    }
+    return pending;
+  }
+
+  _PendingBuy? _fallbackPendingBuyFromExecutions({
+    required String signature,
+    required String mint,
+    required String symbol,
+  }) {
+    final state = ref.read(autoInvestProvider);
+    for (final execution in state.executions) {
+      if (execution.txSignature != signature || execution.side != 'buy') {
+        continue;
+      }
+      final resolvedMint = execution.mint.isNotEmpty ? execution.mint : mint;
+      final resolvedSymbol =
+          execution.symbol.isNotEmpty ? execution.symbol : symbol;
+      return _PendingBuy(
+        mint: resolvedMint,
+        symbol: resolvedSymbol,
+        solAmount: execution.solAmount,
+        executionMode: state.executionMode,
+      );
+    }
+    return null;
+  }
+
+  Future<double?> ensurePositionTokenAmount(
+    OpenPosition position, {
+    bool force = false,
+  }) async {
+    if (position.tokenAmount != null && position.tokenAmount! > 0) {
+      return position.tokenAmount;
+    }
+    final last = _tokenAmountRequests[position.entrySignature];
+    if (!force && last != null) {
+      final elapsed = DateTime.now().difference(last);
+      if (elapsed < _tokenRefreshCooldown) {
+        return null;
+      }
+    }
+    _tokenAmountRequests[position.entrySignature] = DateTime.now();
+    final refreshed = await _refreshPositionTokenAmount(position);
+    if (refreshed != null && refreshed > 0) {
+      _tokenAmountRequests.remove(position.entrySignature);
+    }
+    return refreshed;
+  }
+
+  Future<double?> _refreshPositionTokenAmount(OpenPosition position) async {
+    final owner = ref.read(autoInvestProvider).walletAddress;
+    if (owner == null) return null;
+    double? amount;
+    try {
+      amount = await wallet.readTokenAmountFromTransaction(
+        signature: position.entrySignature,
+        owner: owner,
+        mint: position.mint,
+      );
+    } catch (_) {
+      amount = null;
+    }
+    if (amount == null || amount <= 0) {
+      try {
+        amount = await wallet.readTokenBalance(
+          owner: owner,
+          mint: position.mint,
+        );
+      } catch (_) {
+        amount = null;
+      }
+    }
+    if (amount != null && amount > 0) {
+      ref
+          .read(autoInvestProvider.notifier)
+          .updatePositionAmount(position.entrySignature, amount);
+    }
+    return amount;
+  }
+
+  Future<double?> _forceReadTokenBalance(OpenPosition position) async {
+    final owner = ref.read(autoInvestProvider).walletAddress;
+    if (owner == null) return null;
+    try {
+      return await wallet.readTokenBalance(owner: owner, mint: position.mint);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  OpenPosition? _findPosition(String entrySignature) {
+    final state = ref.read(autoInvestProvider);
+    for (final current in state.positions) {
+      if (current.entrySignature == entrySignature) {
+        return current;
+      }
+    }
+    return null;
   }
 
   void discardPosition(String entrySignature) {
@@ -454,17 +785,40 @@ class AutoInvestExecutor {
   Future<void> sellPosition(
     OpenPosition position, {
     PositionAlertType? reason,
+    bool ignoreRetryThrottle = false,
   }) async {
-    final tokenAmount = position.tokenAmount;
     final notifier = ref.read(autoInvestProvider.notifier);
-    if (tokenAmount == null || tokenAmount <= 0) {
-      notifier.setStatus('No hay tokens para vender en ${position.symbol}.');
+    if (reason != null &&
+        !ignoreRetryThrottle &&
+        _pendingAutoSellRetries.contains(position.entrySignature)) {
       return;
     }
-    if (_positionsSelling.contains(position.entrySignature) ||
-        position.isClosing) {
+    var tokenAmount = position.tokenAmount;
+    var activePosition = position;
+    if (tokenAmount == null || tokenAmount <= 0) {
+      tokenAmount = await ensurePositionTokenAmount(position, force: true);
+      if (tokenAmount == null || tokenAmount <= 0) {
+        tokenAmount = await _forceReadTokenBalance(position);
+        if (tokenAmount != null && tokenAmount > 0) {
+          ref
+              .read(autoInvestProvider.notifier)
+              .updatePositionAmount(position.entrySignature, tokenAmount);
+        }
+      }
+      if (tokenAmount == null || tokenAmount <= 0) {
+        notifier.setStatus(
+          'No hay tokens confirmados para vender en ${position.symbol}.',
+        );
+        return;
+      }
+      activePosition =
+          _findPosition(position.entrySignature) ??
+          position.copyWith(tokenAmount: tokenAmount);
+    }
+    if (_positionsSelling.contains(activePosition.entrySignature) ||
+        activePosition.isClosing) {
       notifier.setStatus(
-        'La posición ${position.symbol} ya está en proceso de venta.',
+        'La posici?n ${activePosition.symbol} ya est? en proceso de venta.',
       );
       return;
     }
@@ -472,19 +826,19 @@ class AutoInvestExecutor {
     final walletAddress = autoState.walletAddress;
     if (walletAddress == null) {
       notifier.setStatus(
-        'Wallet no conectada; no se puede vender ${position.symbol}.',
+        'Wallet no conectada; no se puede vender ${activePosition.symbol}.',
       );
       return;
     }
     if (!wallet.isAvailable) {
       notifier.setStatus(
-        'Wallet no disponible para vender ${position.symbol}.',
+        'Wallet no disponible para vender ${activePosition.symbol}.',
       );
       return;
     }
 
-    _positionsSelling.add(position.entrySignature);
-    notifier.setPositionClosing(position.entrySignature, true);
+    _positionsSelling.add(activePosition.entrySignature);
+    notifier.setPositionClosing(activePosition.entrySignature, true);
 
     try {
       final autoState = ref.read(autoInvestProvider);
@@ -492,26 +846,31 @@ class AutoInvestExecutor {
       final preBalanceFuture = walletAddress == null
           ? null
           : wallet.getWalletBalance(walletAddress);
-      final priceFuture = priceService.fetchQuote(position.mint);
-      final signature = switch (position.executionMode) {
-        AutoInvestExecutionMode.jupiter => await _executeSellViaJupiter(
-          autoState,
-          position,
-          tokenAmount,
-        ),
-        AutoInvestExecutionMode.pumpPortal => await _executeSellViaPumpPortal(
-          autoState,
-          position,
-          tokenAmount,
-        ),
-      };
-      double expectedSol = position.currentValueSol ?? position.entrySol;
+      final priceFuture = priceService.fetchQuote(activePosition.mint);
+      PumpFunQuote? pumpQuote;
       try {
-        final quote = await priceFuture;
-        expectedSol = tokenAmount * quote.priceSol;
+        pumpQuote = await priceFuture;
       } catch (_) {
-        // Mantener el fallback cuando no haya quote disponible al instante.
+        pumpQuote = null;
       }
+      final signature = await (_shouldSellViaJupiter(
+        position: activePosition,
+        quote: pumpQuote,
+      )
+          ? _executeSellViaJupiter(
+              autoState,
+              activePosition,
+              tokenAmount,
+            )
+          : _executeSellViaPumpPortal(
+              autoState,
+              activePosition,
+              tokenAmount,
+            ));
+      double expectedSol =
+          pumpQuote != null
+              ? tokenAmount * pumpQuote.priceSol
+              : activePosition.currentValueSol ?? activePosition.entrySol;
       double? preBalance;
       if (preBalanceFuture != null) {
         try {
@@ -522,8 +881,8 @@ class AutoInvestExecutor {
       }
       notifier.recordExecution(
         ExecutionRecord(
-          mint: position.mint,
-          symbol: position.symbol,
+          mint: activePosition.mint,
+          symbol: activePosition.symbol,
           solAmount: expectedSol,
           side: 'sell',
           txSignature: signature,
@@ -532,17 +891,17 @@ class AutoInvestExecutor {
       );
       if (reason != null) {
         notifier.setStatus(
-          'Venta automática de ${position.symbol} por ${reason.label.toLowerCase()}.',
+          'Venta autom?tica de ${activePosition.symbol} por ${reason.label.toLowerCase()}.',
         );
       } else {
-        notifier.setStatus('Venta enviada para ${position.symbol}.');
+        notifier.setStatus('Venta enviada para ${activePosition.symbol}.');
       }
-      // Registro de auditoría preliminar de venta (esperado)
+      // Registro de auditor?a preliminar de venta (esperado)
       unawaited(
         ref
             .read(transactionAuditLoggerProvider)
             .logSellFromPosition(
-              position: position,
+              position: activePosition,
               signature: signature,
               expectedExitSol: expectedSol,
               reason: reason,
@@ -551,15 +910,23 @@ class AutoInvestExecutor {
       unawaited(
         _trackSellConfirmation(
           signature: signature,
-          position: position,
-          realizedSol: expectedSol > 0 ? expectedSol : position.entrySol,
+          position: activePosition,
+          expectedSol: expectedSol > 0 ? expectedSol : activePosition.entrySol,
           preBalanceSol: preBalance,
         ),
       );
     } catch (error) {
-      _positionsSelling.remove(position.entrySignature);
-      notifier.setPositionClosing(position.entrySignature, false);
-      notifier.setStatus('Venta falló (${position.symbol}): $error');
+      _positionsSelling.remove(activePosition.entrySignature);
+      notifier.setPositionClosing(activePosition.entrySignature, false);
+      notifier.setStatus('Venta falló (${activePosition.symbol}): $error');
+      if (reason != null) {
+        unawaited(
+          _scheduleAutoSellRetry(
+            position: activePosition,
+            reason: reason,
+          ),
+        );
+      }
     }
   }
 
@@ -608,6 +975,92 @@ class AutoInvestExecutor {
     return wallet.signAndSendBase64(swap.swapTransaction);
   }
 
+  bool _shouldSellViaJupiter({
+    required OpenPosition position,
+    required PumpFunQuote? quote,
+  }) {
+    if (position.executionMode == AutoInvestExecutionMode.jupiter) {
+      return true;
+    }
+    if (quote == null) {
+      return false;
+    }
+    return quote.isGraduated;
+  }
+
+  Future<void> _scheduleAutoSellRetry({
+    required OpenPosition position,
+    required PositionAlertType reason,
+  }) async {
+    if (_pendingAutoSellRetries.contains(position.entrySignature)) {
+      return;
+    }
+    _pendingAutoSellRetries.add(position.entrySignature);
+    try {
+      await Future.delayed(_autoSellRetryDelay);
+    } finally {
+      _pendingAutoSellRetries.remove(position.entrySignature);
+    }
+    final refreshed = _findPosition(position.entrySignature);
+    if (refreshed == null || refreshed.isClosing) {
+      return;
+    }
+    final shouldRetry = await _shouldRetryAutoSell(refreshed, reason);
+    if (!shouldRetry) {
+      ref
+          .read(autoInvestProvider.notifier)
+          .setStatus(
+            'Venta reintentada cancelada en ${refreshed.symbol}; ya no cumple ${reason.label.toLowerCase()}.',
+          );
+      return;
+    }
+    await sellPosition(
+      refreshed,
+      reason: reason,
+      ignoreRetryThrottle: true,
+    );
+  }
+
+  Future<bool> _shouldRetryAutoSell(
+    OpenPosition position,
+    PositionAlertType reason,
+  ) async {
+    double? tokenAmount = position.tokenAmount;
+    if (tokenAmount == null || tokenAmount <= 0) {
+      tokenAmount = await ensurePositionTokenAmount(position, force: true);
+      tokenAmount ??= await _forceReadTokenBalance(position);
+    }
+    if (tokenAmount == null || tokenAmount <= 0) {
+      return false;
+    }
+    try {
+      final quote = await priceService.fetchQuote(position.mint);
+      if (quote.priceSol <= 0) {
+        return false;
+      }
+      final currentValue = tokenAmount * quote.priceSol;
+      if (position.entrySol <= 0) {
+        return false;
+      }
+      final pnlPercent =
+          ((currentValue - position.entrySol) / position.entrySol) * 100.0;
+      final state = ref.read(autoInvestProvider);
+      if (reason == PositionAlertType.takeProfit) {
+        return state.takeProfitPercent > 0 &&
+            pnlPercent >= state.takeProfitPercent;
+      }
+      return state.stopLossPercent > 0 &&
+          pnlPercent <= -state.stopLossPercent;
+    } catch (error) {
+      ref
+          .read(autoInvestProvider.notifier)
+          .setStatus(
+            'No se pudo verificar reintento de venta (${position.symbol}): $error',
+          );
+      return false;
+    }
+  }
+
   Future<void> _trackConfirmation(
     String signature,
     String symbol,
@@ -615,26 +1068,57 @@ class AutoInvestExecutor {
   ) async {
     try {
       await wallet.waitForConfirmation(signature);
-      ref
-          .read(autoInvestProvider.notifier)
-          .updateExecutionStatus(signature, status: 'confirmed');
+      final notifier = ref.read(autoInvestProvider.notifier);
+      notifier.updateExecutionStatus(signature, status: 'confirmed');
+      final consumed = _consumePendingBuy(signature);
+      final pending =
+          consumed ?? _fallbackPendingBuyFromExecutions(
+            signature: signature,
+            mint: mint,
+            symbol: symbol,
+          );
+      if (pending != null) {
+        notifier.recordPositionEntry(
+          mint: pending.mint,
+          symbol: pending.symbol,
+          solAmount: pending.solAmount,
+          txSignature: signature,
+          executionMode: pending.executionMode,
+          subtractBudget: consumed == null,
+        );
+        _recentMints[pending.mint] = DateTime.now();
+      } else {
+        _recentMints[mint] = DateTime.now();
+      }
       final owner = ref.read(autoInvestProvider).walletAddress;
       if (owner != null) {
+        double? amount;
         try {
-          final amount = await wallet.readTokenAmountFromTransaction(
+          amount = await wallet.readTokenAmountFromTransaction(
             signature: signature,
             owner: owner,
             mint: mint,
           );
-          if (amount != null && amount > 0) {
-            ref
-                .read(autoInvestProvider.notifier)
-                .updatePositionAmount(signature, amount);
-          }
         } catch (error) {
           ref
               .read(autoInvestProvider.notifier)
               .setStatus('No se pudo leer el fill ($symbol): $error');
+        }
+        if (amount == null || amount <= 0) {
+          try {
+            amount = await wallet.readTokenBalance(owner: owner, mint: mint);
+          } catch (error) {
+            ref
+                .read(autoInvestProvider.notifier)
+                .setStatus(
+                  'No se pudo leer el balance actual ($symbol): $error',
+                );
+          }
+        }
+        if (amount != null && amount > 0) {
+          ref
+              .read(autoInvestProvider.notifier)
+              .updatePositionAmount(signature, amount);
         }
       }
     } catch (error) {
@@ -644,47 +1128,43 @@ class AutoInvestExecutor {
         status: 'failed',
         errorMessage: error.toString(),
       );
-      notifier.setStatus('Orden fall� ($symbol): $error');
-      notifier.removePosition(signature, refundBudget: true);
-      _recentMints.remove(mint);
+      notifier.setStatus('Orden fall??? ($symbol): $error');
+      final pending = _consumePendingBuy(signature);
+      if (pending != null) {
+        notifier.releaseBudgetReservation(pending.solAmount);
+        _recentMints[pending.mint] = DateTime.now();
+      } else {
+        notifier.removePosition(signature, refundBudget: true);
+        _recentMints[mint] = DateTime.now();
+      }
+
     }
   }
 
   Future<void> _trackSellConfirmation({
     required String signature,
     required OpenPosition position,
-    required double realizedSol,
+    required double expectedSol,
     double? preBalanceSol,
   }) async {
     try {
       await wallet.waitForConfirmation(signature);
-      ref
-          .read(autoInvestProvider.notifier)
-          .updateExecutionStatus(signature, status: 'confirmed');
-      double? exitFeeSol;
-      final owner = ref.read(autoInvestProvider).walletAddress;
-      if (owner != null && preBalanceSol != null) {
-        double? post;
-        try {
-          post = await wallet.getWalletBalance(owner);
-        } catch (_) {
-          post = null;
-        }
-        if (post != null) {
-          final actualDelta = post - preBalanceSol;
-          final expectedDelta = realizedSol;
-          exitFeeSol = (expectedDelta - actualDelta).abs();
-        }
-      }
-      ref
-          .read(autoInvestProvider.notifier)
-          .completePositionSale(
-            position: position,
-            sellSignature: signature,
-            realizedSol: realizedSol,
-            exitFeeSol: exitFeeSol,
-          );
-      // Registro de auditoría confirmado con PnL cuando sea posible
+      final notifier = ref.read(autoInvestProvider.notifier);
+      notifier.updateExecutionStatus(signature, status: 'confirmed');
+      final realizedSol = await _determineRealizedSol(
+        signature: signature,
+        expectedSol: expectedSol,
+        preBalanceSol: preBalanceSol,
+      );
+      final exitFeeSol =
+          realizedSol < expectedSol ? (expectedSol - realizedSol) : null;
+      notifier.completePositionSale(
+        position: position,
+        sellSignature: signature,
+        realizedSol: realizedSol,
+        exitFeeSol: exitFeeSol,
+      );
+      // Registro de auditor�a confirmado con PnL cuando sea posible
       final pnl = realizedSol - position.entrySol;
       final pnlPct = position.entrySol == 0
           ? null
@@ -695,7 +1175,7 @@ class AutoInvestExecutor {
             .logSellFromPosition(
               position: position,
               signature: signature,
-              expectedExitSol: realizedSol,
+              expectedExitSol: expectedSol,
               realizedExitSol: realizedSol,
               pnlSol: pnl,
               pnlPercent: pnlPct,
@@ -714,11 +1194,100 @@ class AutoInvestExecutor {
           .setPositionClosing(position.entrySignature, false);
       ref
           .read(autoInvestProvider.notifier)
-          .setStatus('Venta falló (${position.symbol}): $error');
+          .setStatus('Venta fall� (${position.symbol}): $error');
     } finally {
       _positionsSelling.remove(position.entrySignature);
+      _resetWalletBalanceCache();
     }
   }
+
+  Future<double> _determineRealizedSol({
+    required String signature,
+    required double expectedSol,
+    double? preBalanceSol,
+  }) async {
+    final owner = ref.read(autoInvestProvider).walletAddress;
+    if (owner == null) {
+      throw Exception('Wallet sin propietario para leer salida.');
+    }
+    final solDelta = await _retryReadSolDelta(signature: signature, owner: owner);
+    if (solDelta != null) {
+      return solDelta;
+    }
+    if (preBalanceSol != null) {
+      final balanceDelta = await _retryReadBalanceDelta(
+        owner: owner,
+        preBalanceSol: preBalanceSol,
+      );
+      if (balanceDelta != null) {
+        return balanceDelta;
+      }
+    }
+    throw Exception(
+      'No se pudo determinar la salida real (expected ${expectedSol.toStringAsFixed(4)} SOL).',
+    );
+  }
+
+  Future<double?> _retryReadSolDelta({
+    required String signature,
+    required String owner,
+    int maxAttempts = 5,
+  }) async {
+    Object? lastError;
+    for (var attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        final delta = await wallet.readSolChangeFromTransaction(
+          signature: signature,
+          owner: owner,
+        );
+        if (delta != null) {
+          return delta;
+        }
+      } catch (error) {
+        lastError = error;
+      }
+      await Future.delayed(Duration(milliseconds: 300 * (attempt + 1)));
+    }
+    if (lastError != null) {
+      ref
+          .read(autoInvestProvider.notifier)
+          .setStatus('No se pudo leer delta real de la venta: $lastError');
+    }
+    return null;
+  }
+
+  Future<double?> _retryReadBalanceDelta({
+    required String owner,
+    required double preBalanceSol,
+    int maxAttempts = 3,
+  }) async {
+    for (var attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        final post = await wallet.getWalletBalance(owner);
+        if (post != null) {
+          return post - preBalanceSol;
+        }
+      } catch (_) {
+        // Ignorar y reintentar
+      }
+      await Future.delayed(const Duration(milliseconds: 400));
+    }
+    return null;
+  }
+}
+
+class _PendingBuy {
+  const _PendingBuy({
+    required this.mint,
+    required this.symbol,
+    required this.solAmount,
+    required this.executionMode,
+  });
+
+  final String mint;
+  final String symbol;
+  final double solAmount;
+  final AutoInvestExecutionMode executionMode;
 }
 
 class _ScanReport {

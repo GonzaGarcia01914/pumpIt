@@ -39,7 +39,7 @@ class TransactionAuditLogger {
   io.File _resolveFile() {
     // Same folder as the running process (best-effort on desktop/dev runs)
     final dir = io.Directory.current.path;
-    final path = dir + io.Platform.pathSeparator + 'results.csv';
+    final path = '$dir${io.Platform.pathSeparator}results.csv';
     return io.File(path);
   }
 
@@ -55,7 +55,7 @@ class TransactionAuditLogger {
   String _csv(String? value) {
     final v = value ?? '';
     if (v.contains(',') || v.contains('"') || v.contains('\n')) {
-      return '"' + v.replaceAll('"', '""') + '"';
+      return '"${v.replaceAll('"', '""')}"';
     }
     return v;
   }
@@ -137,7 +137,12 @@ class TransactionAuditLogger {
       position.tokenAmount?.toStringAsFixed(8) ?? '',
       position.entryPriceSol?.toStringAsFixed(8) ?? '',
       position.lastPriceSol?.toStringAsFixed(8) ?? '',
-      (pnlSol ?? (realizedExitSol == null ? null : (realizedExitSol - position.entrySol)))?.toStringAsFixed(8) ?? '',
+      (pnlSol ??
+                  (realizedExitSol == null
+                      ? null
+                      : (realizedExitSol - position.entrySol)))
+              ?.toStringAsFixed(8) ??
+          '',
       pnlPercent?.toStringAsFixed(4) ?? '',
       signature,
       solscan,

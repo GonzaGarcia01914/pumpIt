@@ -432,9 +432,12 @@ class _FiltersPanelState extends State<_FiltersPanel> {
                 label: const Text('Aplicar filtros'),
               ),
               const SizedBox(width: 12),
-              Text(
-                'Edita los valores y presiona Aplicar para refrescar.',
-                style: theme.textTheme.bodySmall,
+              Expanded(
+                child: Text(
+                  'Edita los valores y presiona Aplicar para refrescar.',
+                  style: theme.textTheme.bodySmall,
+                  overflow: TextOverflow.visible,
+                ),
               ),
             ],
           ),
