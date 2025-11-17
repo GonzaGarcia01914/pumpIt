@@ -356,20 +356,20 @@ class _FilterSection extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           SwitchListTile.adaptive(
-            value: state.onlyLive,
-            onChanged: notifier.updateOnlyLive,
-            title: const Text('Solo en vivo (excluir completadas)'),
-            subtitle: const Text(
-              'Restringe a memecoins con bonding curve activa.',
-            ),
-          ),
-          const SizedBox(height: 8),
-          SwitchListTile.adaptive(
             value: state.preferNewest,
             onChanged: notifier.updatePreferNewest,
             title: const Text('Priorizar tokens más recientes'),
             subtitle: const Text(
               'Si está activo, el bot elegirá primero los mints más nuevos que cumplan los filtros.',
+            ),
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: notifier.resetMarketFilters,
+              icon: const Icon(Icons.restart_alt),
+              label: const Text('Restablecer filtros'),
             ),
           ),
         ],
@@ -599,7 +599,7 @@ class _ExecutionModeSection extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
-              value: state.pumpPool,
+              initialValue: state.pumpPool,
               decoration: const InputDecoration(labelText: 'Pool preferido'),
               items: _poolOptions
                   .map((p) => DropdownMenuItem(value: p, child: Text(p)))

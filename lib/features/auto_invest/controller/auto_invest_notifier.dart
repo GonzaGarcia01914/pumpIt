@@ -49,13 +49,15 @@ class AutoInvestState {
     required this.perCoinPercentOfTotal,
     required this.minReplies,
     required this.maxAgeHours,
-    required this.onlyLive,
     required this.preferNewest,
     required this.includeManualMints,
     required this.manualMints,
     this.walletBalanceUpdatedAt,
     this.solPriceUpdatedAt,
     this.statusMessage,
+    this.lastScanMessage,
+    this.lastScanReasons = const [],
+    this.lastScanFailed = false,
   });
 
   factory AutoInvestState.initial() => AutoInvestState(
@@ -92,12 +94,14 @@ class AutoInvestState {
     perCoinPercentOfTotal: 0.1,
     minReplies: 0,
     maxAgeHours: 72,
-    onlyLive: false,
     preferNewest: false,
     includeManualMints: false,
     manualMints: const [],
     walletBalanceUpdatedAt: null,
     solPriceUpdatedAt: null,
+    lastScanMessage: null,
+    lastScanReasons: const [],
+    lastScanFailed: false,
   );
 
   final bool isEnabled;
@@ -133,13 +137,15 @@ class AutoInvestState {
   final double perCoinPercentOfTotal;
   final double minReplies;
   final double maxAgeHours;
-  final bool onlyLive;
   final bool preferNewest;
   final bool includeManualMints;
   final List<String> manualMints;
   final DateTime? walletBalanceUpdatedAt;
   final DateTime? solPriceUpdatedAt;
   final String? statusMessage;
+  final String? lastScanMessage;
+  final List<String> lastScanReasons;
+  final bool lastScanFailed;
 
   double get deployedBudgetSol {
     final exposure = positions.fold<double>(0, (sum, position) {
@@ -182,7 +188,6 @@ class AutoInvestState {
     double? perCoinPercentOfTotal,
     double? minReplies,
     double? maxAgeHours,
-    bool? onlyLive,
     bool? preferNewest,
     bool? includeManualMints,
     List<String>? manualMints,
@@ -190,6 +195,10 @@ class AutoInvestState {
     DateTime? solPriceUpdatedAt,
     String? statusMessage,
     bool clearMessage = false,
+    String? lastScanMessage,
+    List<String>? lastScanReasons,
+    bool? lastScanFailed,
+    bool clearScanSummary = false,
   }) {
     return AutoInvestState(
       isEnabled: isEnabled ?? this.isEnabled,
@@ -226,7 +235,6 @@ class AutoInvestState {
           perCoinPercentOfTotal ?? this.perCoinPercentOfTotal,
       minReplies: minReplies ?? this.minReplies,
       maxAgeHours: maxAgeHours ?? this.maxAgeHours,
-      onlyLive: onlyLive ?? this.onlyLive,
       preferNewest: preferNewest ?? this.preferNewest,
       includeManualMints: includeManualMints ?? this.includeManualMints,
       manualMints: manualMints ?? this.manualMints,
@@ -234,6 +242,15 @@ class AutoInvestState {
           walletBalanceUpdatedAt ?? this.walletBalanceUpdatedAt,
       solPriceUpdatedAt: solPriceUpdatedAt ?? this.solPriceUpdatedAt,
       statusMessage: clearMessage ? null : statusMessage ?? this.statusMessage,
+      lastScanMessage:
+          clearScanSummary ? null : lastScanMessage ?? this.lastScanMessage,
+      lastScanReasons: clearScanSummary
+          ? const []
+          : (lastScanReasons != null
+              ? List<String>.unmodifiable(lastScanReasons)
+              : this.lastScanReasons),
+      lastScanFailed:
+          clearScanSummary ? false : lastScanFailed ?? this.lastScanFailed,
     );
   }
 
@@ -263,7 +280,6 @@ class AutoInvestState {
     'perCoinPercentOfTotal': perCoinPercentOfTotal,
     'minReplies': minReplies,
     'maxAgeHours': maxAgeHours,
-    'onlyLive': onlyLive,
     'preferNewest': preferNewest,
     'includeManualMints': includeManualMints,
     'manualMints': manualMints,
@@ -388,7 +404,6 @@ class AutoInvestState {
       ),
       minReplies: readDouble('minReplies', initial.minReplies),
       maxAgeHours: readDouble('maxAgeHours', initial.maxAgeHours),
-      onlyLive: json['onlyLive'] as bool? ?? initial.onlyLive,
       preferNewest: json['preferNewest'] as bool? ?? initial.preferNewest,
       includeManualMints:
           json['includeManualMints'] as bool? ?? initial.includeManualMints,
@@ -402,6 +417,9 @@ class AutoInvestState {
           initial.walletBalanceUpdatedAt,
       solPriceUpdatedAt:
           parseDate(json['solPriceUpdatedAt']) ?? initial.solPriceUpdatedAt,
+      lastScanMessage: null,
+      lastScanReasons: const [],
+      lastScanFailed: false,
     );
   }
 }
@@ -591,12 +609,25 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     _setState(state.copyWith(maxAgeHours: normalized));
   }
 
-  void updateOnlyLive(bool value) {
-    _setState(state.copyWith(onlyLive: value));
-  }
-
   void updatePreferNewest(bool value) {
     _setState(state.copyWith(preferNewest: value));
+  }
+
+  void resetMarketFilters() {
+    final defaults = AutoInvestState.initial();
+    _setState(
+      state.copyWith(
+        minMarketCap: defaults.minMarketCap,
+        maxMarketCap: defaults.maxMarketCap,
+        minVolume24h: defaults.minVolume24h,
+        maxVolume24h: defaults.maxVolume24h,
+        minReplies: defaults.minReplies,
+        maxAgeHours: defaults.maxAgeHours,
+        preferNewest: defaults.preferNewest,
+        clearMessage: true,
+      ),
+    );
+    setStatus('Filtros de mercado reiniciados.');
   }
 
   Future<void> refreshWalletBalance() async {
@@ -722,6 +753,33 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     } catch (_) {
       // En contextos donde el globalLogProvider no esté disponible, ignorar.
     }
+  }
+
+  void recordScanReport({
+    required String message,
+    required bool failed,
+    List<String> reasons = const [],
+  }) {
+    try {
+      ref
+          .read(globalLogProvider.notifier)
+          .show(
+            message,
+            level: failed ? AppLogLevel.error : AppLogLevel.neutral,
+          );
+    } catch (_) {
+      // Ignorar si el log global no está disponible en este contexto.
+    }
+    final List<String> sanitizedReasons =
+        failed ? List<String>.unmodifiable(reasons) : const <String>[];
+    _setState(
+      state.copyWith(
+        lastScanMessage: message,
+        lastScanReasons: sanitizedReasons,
+        lastScanFailed: failed,
+      ),
+      persist: false,
+    );
   }
 
   Future<void> connectWallet() async {
@@ -947,6 +1005,7 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
         analysisSummary: null,
         isAnalyzingResults: false,
         clearMessage: true,
+        clearScanSummary: true,
       ),
     );
     setStatus('Resultados reiniciados.');
@@ -981,6 +1040,43 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     _setState(
       state.copyWith(positions: existing, availableBudgetSol: nextAvailable),
     );
+  }
+
+  bool removePosition(
+    String entrySignature, {
+    bool refundBudget = false,
+    String? message,
+  }) {
+    OpenPosition? removed;
+    final remaining = <OpenPosition>[];
+    for (final position in state.positions) {
+      if (position.entrySignature == entrySignature) {
+        removed = position;
+        continue;
+      }
+      remaining.add(position);
+    }
+    if (removed == null) {
+      return false;
+    }
+    var nextAvailable = state.availableBudgetSol;
+    if (refundBudget) {
+      nextAvailable += removed.entrySol;
+      if (nextAvailable > state.totalBudgetSol) {
+        nextAvailable = state.totalBudgetSol;
+      }
+    }
+    _setState(
+      state.copyWith(
+        positions: remaining,
+        availableBudgetSol: nextAvailable,
+        clearMessage: message != null,
+      ),
+    );
+    if (message != null && message.isNotEmpty) {
+      setStatus(message);
+    }
+    return true;
   }
 
   void updatePositionAmount(String txSignature, double tokenAmount) {

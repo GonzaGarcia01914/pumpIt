@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../featured_coins/controller/featured_coin_notifier.dart';
@@ -14,7 +15,6 @@ import '../services/pump_portal_trade_service.dart';
 import '../services/wallet_execution_service.dart';
 import '../services/transaction_audit_logger.dart';
 import 'auto_invest_notifier.dart';
-import '../../../core/log/global_log.dart';
 
 const _lamportsPerSol = 1000000000;
 
@@ -36,7 +36,6 @@ class AutoInvestExecutor {
   bool _isRunning = false;
   final Map<String, DateTime> _recentMints = {};
   final Set<String> _positionsSelling = {};
-  bool _budgetLocked = false;
 
   void init() {
     ref.listen<AutoInvestState>(
@@ -51,27 +50,12 @@ class AutoInvestExecutor {
 
   void _scheduleCheck() {
     final autoState = ref.read(autoInvestProvider);
+    _cleanupFailedEntries(autoState);
     if (!autoState.isEnabled || autoState.walletAddress == null) {
       return;
     }
     if (!wallet.isAvailable) {
       return;
-    }
-    final lacksBudget =
-        autoState.availableBudgetSol + 1e-9 < autoState.perCoinBudgetSol;
-    if (lacksBudget) {
-      if (!_budgetLocked) {
-        _budgetLocked = true;
-        ref
-            .read(autoInvestProvider.notifier)
-            .setStatus(
-              'Presupuesto disponible ('
-              '${autoState.availableBudgetSol.toStringAsFixed(3)} SOL) insuficiente para nuevas compras.',
-            );
-      }
-      return;
-    } else if (_budgetLocked) {
-      _budgetLocked = false;
     }
     if (_isRunning) {
       return;
@@ -96,7 +80,6 @@ class AutoInvestExecutor {
           .read(autoInvestProvider.notifier)
           .setStatus(
             'Wallet no disponible. Verifica Phantom (web) o LOCAL_KEY_PATH (desktop).',
-            level: AppLogLevel.error,
           );
       return;
     }
@@ -104,18 +87,46 @@ class AutoInvestExecutor {
     final coins = ref.read(featuredCoinProvider).coins;
 
     _cleanupRecent();
+    final notifier = ref.read(autoInvestProvider.notifier);
+    final scanReport = _scanFeaturedCoins(coins, autoState);
+    final scanMessage = _scanSummaryMessage(scanReport, autoState);
+    if (scanReport.hasCandidate) {
+      if (autoState.lastScanFailed ||
+          autoState.lastScanMessage != scanMessage) {
+        notifier.recordScanReport(message: scanMessage, failed: false);
+      }
+    } else {
+      final reasons = _scanFailureReasons(scanReport, autoState);
+      final sameMessage = autoState.lastScanMessage == scanMessage;
+      final sameReasons = listEquals(autoState.lastScanReasons, reasons);
+      if (!(autoState.lastScanFailed && sameMessage && sameReasons)) {
+        notifier.recordScanReport(
+          message: scanMessage,
+          failed: true,
+          reasons: reasons,
+        );
+      }
+    }
     FeaturedCoin? candidate;
     if (autoState.includeManualMints && autoState.manualMints.isNotEmpty) {
       candidate = _pickManualCandidate(autoState);
     }
-    candidate ??= _pickCandidate(coins, autoState);
+    candidate ??= scanReport.candidate;
     if (candidate == null) return;
+    final alreadyHolding = autoState.positions.any(
+      (position) => position.mint == candidate!.mint,
+    );
+    if (alreadyHolding) {
+      notifier.setStatus(
+        'Ya existe una posición abierta en ${candidate.symbol}; se omite la entrada.',
+      );
+      return;
+    }
     if (autoState.availableBudgetSol < autoState.perCoinBudgetSol) {
       ref
           .read(autoInvestProvider.notifier)
           .setStatus(
             'Presupuesto disponible (${autoState.availableBudgetSol.toStringAsFixed(2)} SOL) insuficiente para nueva entrada.',
-            level: AppLogLevel.error,
           );
       return;
     }
@@ -132,7 +143,6 @@ class AutoInvestExecutor {
               'Presupuesto por meme ('
               '${autoState.perCoinBudgetSol.toStringAsFixed(4)} SOL) demasiado bajo. Usa al menos '
               '${minBudget.toStringAsFixed(3)} SOL para cubrir ATA + priority fee.',
-              level: AppLogLevel.error,
             );
         return;
       }
@@ -232,55 +242,122 @@ class AutoInvestExecutor {
     return null;
   }
 
-  FeaturedCoin? _pickCandidate(
+  _ScanReport _scanFeaturedCoins(
     List<FeaturedCoin> coins,
     AutoInvestState autoState,
   ) {
-    final filtered = _filterCoinsByRecencyAndParams(
-      coins,
-      autoState,
-      sortByNewest: autoState.preferNewest,
-    );
-    if (filtered.isEmpty) return null;
-    return filtered.first;
-  }
-
-  // Devuelve la lista de tokens que cumplen los parámetros del autoinvest,
-  // ordenada por fecha de creación (más recientes primero).
-  List<FeaturedCoin> _filterCoinsByRecencyAndParams(
-    List<FeaturedCoin> coins,
-    AutoInvestState autoState, {
-    bool sortByNewest = false,
-  }) {
     final now = DateTime.now();
-    final filtered = coins.where((coin) {
+    var eligible = 0;
+    var filteredByMarketCap = 0;
+    var filteredByReplies = 0;
+    var filteredByAge = 0;
+    var filteredByCooldown = 0;
+    var filteredByHeld = 0;
+    final heldMints = {
+      for (final position in autoState.positions) position.mint,
+    };
+    FeaturedCoin? candidate;
+    for (final coin in coins) {
       if (coin.usdMarketCap < autoState.minMarketCap ||
           coin.usdMarketCap > autoState.maxMarketCap) {
-        return false;
+        filteredByMarketCap++;
+        continue;
       }
       if (autoState.minReplies > 0 &&
           coin.replyCount.toDouble() < autoState.minReplies) {
-        return false;
+        filteredByReplies++;
+        continue;
       }
       if (autoState.maxAgeHours > 0) {
         final ageHours = now.difference(coin.createdAt).inMinutes / 60.0;
-        if (ageHours > autoState.maxAgeHours) return false;
-      }
-      if (autoState.onlyLive ||
-          autoState.executionMode == AutoInvestExecutionMode.pumpPortal) {
-        if (!coin.isCurrentlyLive || coin.isComplete) {
-          return false;
+        if (ageHours > autoState.maxAgeHours) {
+          filteredByAge++;
+          continue;
         }
       }
-      if (_recentMints.containsKey(coin.mint)) {
-        return false;
+      if (heldMints.contains(coin.mint)) {
+        filteredByHeld++;
+        continue;
       }
-      return true;
-    }).toList();
-    if (sortByNewest) {
-      filtered.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      if (_recentMints.containsKey(coin.mint)) {
+        filteredByCooldown++;
+        continue;
+      }
+      eligible++;
+      candidate ??= coin;
     }
-    return filtered;
+    return _ScanReport(
+      total: coins.length,
+      eligible: eligible,
+      filteredByMarketCap: filteredByMarketCap,
+      filteredByReplies: filteredByReplies,
+      filteredByAge: filteredByAge,
+      filteredByHeld: filteredByHeld,
+      filteredByCooldown: filteredByCooldown,
+      candidate: candidate,
+    );
+  }
+
+  String _scanSummaryMessage(_ScanReport report, AutoInvestState autoState) {
+    final buffer = StringBuffer()
+      ..write(
+        'Escaneo memecoins: ${report.eligible}/${report.total} aptas para MC '
+        '${autoState.minMarketCap.toStringAsFixed(0)}-'
+        '${autoState.maxMarketCap.toStringAsFixed(0)} USD',
+      );
+    if (autoState.minReplies > 0) {
+      buffer.write(' | replies >= ${autoState.minReplies.toStringAsFixed(0)}');
+    }
+    if (autoState.maxAgeHours > 0) {
+      buffer.write(' | edad <= ${autoState.maxAgeHours.toStringAsFixed(0)}h');
+    }
+    buffer.write(
+      report.hasCandidate && report.candidate != null
+          ? ' | candidata ${report.candidate!.symbol}.'
+          : ' | sin candidatas.',
+    );
+    return buffer.toString();
+  }
+
+  List<String> _scanFailureReasons(
+    _ScanReport report,
+    AutoInvestState autoState,
+  ) {
+    if (report.total == 0) {
+      return const ['No hay memecoins en featured en este momento.'];
+    }
+    final reasons = <String>[];
+    if (report.filteredByMarketCap > 0) {
+      reasons.add(
+        '${report.filteredByMarketCap} fuera del rango de market cap '
+        '(${autoState.minMarketCap.toStringAsFixed(0)}-'
+        '${autoState.maxMarketCap.toStringAsFixed(0)} USD).',
+      );
+    }
+    if (autoState.minReplies > 0 && report.filteredByReplies > 0) {
+      reasons.add(
+        '${report.filteredByReplies} no alcanzan los replies mínimos '
+        '(${autoState.minReplies.toStringAsFixed(0)}).',
+      );
+    }
+    if (autoState.maxAgeHours > 0 && report.filteredByAge > 0) {
+      reasons.add(
+        '${report.filteredByAge} superan las '
+        '${autoState.maxAgeHours.toStringAsFixed(0)}h desde el deploy.',
+      );
+    }
+    if (report.filteredByHeld > 0) {
+      reasons.add('${report.filteredByHeld} ya tienen una posición abierta.');
+    }
+    if (report.filteredByCooldown > 0) {
+      reasons.add(
+        '${report.filteredByCooldown} están en cooldown por intentos recientes.',
+      );
+    }
+    if (report.eligible == 0 && reasons.isEmpty) {
+      reasons.add('Ninguna memecoin cumplió los filtros actuales.');
+    }
+    return reasons;
   }
 
   Future<String> _executeViaJupiter(
@@ -329,6 +406,51 @@ class AutoInvestExecutor {
     _recentMints.removeWhere((_, time) => time.isBefore(cutoff));
   }
 
+
+  void _cleanupFailedEntries(AutoInvestState state) {
+    if (state.executions.isEmpty || state.positions.isEmpty) {
+      return;
+    }
+    final failedBuys = <String, String>{};
+    for (final execution in state.executions) {
+      if (execution.side != 'buy') continue;
+      if (execution.status != 'failed') continue;
+      failedBuys[execution.txSignature] = execution.mint;
+    }
+    if (failedBuys.isEmpty) return;
+    final notifier = ref.read(autoInvestProvider.notifier);
+    for (final position in state.positions) {
+      final mint = failedBuys[position.entrySignature];
+      if (mint == null) continue;
+      final removed = notifier.removePosition(
+        position.entrySignature,
+        refundBudget: true,
+      );
+      if (removed) {
+        _recentMints.remove(mint);
+        failedBuys.remove(position.entrySignature);
+      }
+      if (failedBuys.isEmpty) {
+        break;
+      }
+    }
+  }
+
+  void discardPosition(String entrySignature) {
+    _positionsSelling.remove(entrySignature);
+    final state = ref.read(autoInvestProvider);
+    OpenPosition? position;
+    for (final current in state.positions) {
+      if (current.entrySignature == entrySignature) {
+        position = current;
+        break;
+      }
+    }
+    if (position != null) {
+      _recentMints.remove(position.mint);
+    }
+  }
+
   Future<void> sellPosition(
     OpenPosition position, {
     PositionAlertType? reason,
@@ -351,14 +473,12 @@ class AutoInvestExecutor {
     if (walletAddress == null) {
       notifier.setStatus(
         'Wallet no conectada; no se puede vender ${position.symbol}.',
-        level: AppLogLevel.error,
       );
       return;
     }
     if (!wallet.isAvailable) {
       notifier.setStatus(
         'Wallet no disponible para vender ${position.symbol}.',
-        level: AppLogLevel.error,
       );
       return;
     }
@@ -369,11 +489,10 @@ class AutoInvestExecutor {
     try {
       final autoState = ref.read(autoInvestProvider);
       final walletAddress = autoState.walletAddress;
-      final preBalance = walletAddress == null
+      final preBalanceFuture = walletAddress == null
           ? null
-          : await wallet.getWalletBalance(walletAddress);
-      final quote = await priceService.fetchQuote(position.mint);
-      final expectedSol = tokenAmount * quote.priceSol;
+          : wallet.getWalletBalance(walletAddress);
+      final priceFuture = priceService.fetchQuote(position.mint);
       final signature = switch (position.executionMode) {
         AutoInvestExecutionMode.jupiter => await _executeSellViaJupiter(
           autoState,
@@ -386,6 +505,21 @@ class AutoInvestExecutor {
           tokenAmount,
         ),
       };
+      double expectedSol = position.currentValueSol ?? position.entrySol;
+      try {
+        final quote = await priceFuture;
+        expectedSol = tokenAmount * quote.priceSol;
+      } catch (_) {
+        // Mantener el fallback cuando no haya quote disponible al instante.
+      }
+      double? preBalance;
+      if (preBalanceFuture != null) {
+        try {
+          preBalance = await preBalanceFuture;
+        } catch (_) {
+          preBalance = null;
+        }
+      }
       notifier.recordExecution(
         ExecutionRecord(
           mint: position.mint,
@@ -399,13 +533,9 @@ class AutoInvestExecutor {
       if (reason != null) {
         notifier.setStatus(
           'Venta automática de ${position.symbol} por ${reason.label.toLowerCase()}.',
-          level: AppLogLevel.success,
         );
       } else {
-        notifier.setStatus(
-          'Venta enviada para ${position.symbol}.',
-          level: AppLogLevel.success,
-        );
+        notifier.setStatus('Venta enviada para ${position.symbol}.');
       }
       // Registro de auditoría preliminar de venta (esperado)
       unawaited(
@@ -429,10 +559,7 @@ class AutoInvestExecutor {
     } catch (error) {
       _positionsSelling.remove(position.entrySignature);
       notifier.setPositionClosing(position.entrySignature, false);
-      notifier.setStatus(
-        'Venta falló (${position.symbol}): $error',
-        level: AppLogLevel.error,
-      );
+      notifier.setStatus('Venta falló (${position.symbol}): $error');
     }
   }
 
@@ -507,23 +634,19 @@ class AutoInvestExecutor {
         } catch (error) {
           ref
               .read(autoInvestProvider.notifier)
-              .setStatus(
-                'No se pudo leer el fill ($symbol): $error',
-                level: AppLogLevel.error,
-              );
+              .setStatus('No se pudo leer el fill ($symbol): $error');
         }
       }
     } catch (error) {
-      ref
-          .read(autoInvestProvider.notifier)
-          .updateExecutionStatus(
-            signature,
-            status: 'failed',
-            errorMessage: error.toString(),
-          );
-      ref
-          .read(autoInvestProvider.notifier)
-          .setStatus('Orden falló ($symbol): $error', level: AppLogLevel.error);
+      final notifier = ref.read(autoInvestProvider.notifier);
+      notifier.updateExecutionStatus(
+        signature,
+        status: 'failed',
+        errorMessage: error.toString(),
+      );
+      notifier.setStatus('Orden fall� ($symbol): $error');
+      notifier.removePosition(signature, refundBudget: true);
+      _recentMints.remove(mint);
     }
   }
 
@@ -541,7 +664,12 @@ class AutoInvestExecutor {
       double? exitFeeSol;
       final owner = ref.read(autoInvestProvider).walletAddress;
       if (owner != null && preBalanceSol != null) {
-        final post = await wallet.getWalletBalance(owner);
+        double? post;
+        try {
+          post = await wallet.getWalletBalance(owner);
+        } catch (_) {
+          post = null;
+        }
         if (post != null) {
           final actualDelta = post - preBalanceSol;
           final expectedDelta = realizedSol;
@@ -586,14 +714,35 @@ class AutoInvestExecutor {
           .setPositionClosing(position.entrySignature, false);
       ref
           .read(autoInvestProvider.notifier)
-          .setStatus(
-            'Venta falló (${position.symbol}): $error',
-            level: AppLogLevel.error,
-          );
+          .setStatus('Venta falló (${position.symbol}): $error');
     } finally {
       _positionsSelling.remove(position.entrySignature);
     }
   }
+}
+
+class _ScanReport {
+  const _ScanReport({
+    required this.total,
+    required this.eligible,
+    required this.filteredByMarketCap,
+    required this.filteredByReplies,
+    required this.filteredByAge,
+    required this.filteredByHeld,
+    required this.filteredByCooldown,
+    this.candidate,
+  });
+
+  final int total;
+  final int eligible;
+  final int filteredByMarketCap;
+  final int filteredByReplies;
+  final int filteredByAge;
+  final int filteredByHeld;
+  final int filteredByCooldown;
+  final FeaturedCoin? candidate;
+
+  bool get hasCandidate => candidate != null;
 }
 
 final autoInvestExecutorProvider = Provider<AutoInvestExecutor>((ref) {

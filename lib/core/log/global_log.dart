@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter/material.dart';
 
 enum AppLogLevel { neutral, success, error }
 
@@ -76,4 +75,3 @@ class GlobalLogNotifier extends Notifier<GlobalLogState> {
 final globalLogProvider = NotifierProvider<GlobalLogNotifier, GlobalLogState>(
   GlobalLogNotifier.new,
 );
-

@@ -65,6 +65,13 @@ class HomeTabsPage extends ConsumerWidget {
                   children: [
                     _DashboardTopBar(
                       positions: autoInvestState.positions,
+                      isPausedForFunds:
+                          autoInvestState.isEnabled &&
+                              autoInvestState.perCoinBudgetSol > 0 &&
+                              autoInvestState.availableBudgetSol + 1e-6 <
+                                  autoInvestState.perCoinBudgetSol,
+                      availableBudget: autoInvestState.availableBudgetSol,
+                      perCoinBudget: autoInvestState.perCoinBudgetSol,
                     ),
                     const SizedBox(height: 16),
                     Container(
@@ -236,15 +243,35 @@ class _GridPainter extends CustomPainter {
 class _DashboardTopBar extends StatelessWidget {
   const _DashboardTopBar({
     required this.positions,
+    required this.isPausedForFunds,
+    required this.availableBudget,
+    required this.perCoinBudget,
   });
 
   final List<OpenPosition> positions;
+  final bool isPausedForFunds;
+  final double availableBudget;
+  final double perCoinBudget;
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (isPausedForFunds)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Text(
+              'Bot pausado: presupuesto disponible '
+              '${availableBudget.toStringAsFixed(3)} SOL < '
+              '${perCoinBudget.toStringAsFixed(3)} SOL por token.',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: const Color(0xFFFFB74D),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
         _HoldingsStrip(positions: positions),
       ],
     );

@@ -8,7 +8,6 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../controller/auto_invest_executor.dart';
 import '../controller/auto_invest_notifier.dart';
-import '../controller/compat_shims.dart';
 import '../models/execution_record.dart';
 import '../models/position.dart';
 import '../models/simulation_models.dart';
@@ -109,6 +108,16 @@ class _SimulationResultsPageState extends ConsumerState<SimulationResultsPage> {
         ..add(const SizedBox(height: 12))
         ..add(_ResultsOverview(state: state))
         ..add(const SizedBox(height: 24));
+      if (state.lastScanFailed && state.lastScanMessage != null) {
+        children
+          ..add(
+            _ScanFailureBanner(
+              message: state.lastScanMessage!,
+              reasons: state.lastScanReasons,
+            ),
+          )
+          ..add(const SizedBox(height: 24));
+      }
       if (hasPositions) {
         children
           ..add(
@@ -124,11 +133,40 @@ class _SimulationResultsPageState extends ConsumerState<SimulationResultsPage> {
                 position: position,
                 solPriceUsd: state.solPriceUsd,
                 onSell: () => executor.sellPosition(position),
-                onRemove: () => notifier.removePosition(
-                  position.entrySignature,
-                  refundBudget: true,
-                  message: 'Posición ${position.symbol} eliminada manualmente.',
-                ),
+                onRemove: () async {
+                  final confirmed =
+                      await showDialog<bool>(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                          title: const Text('Eliminar posición'),
+                          content: Text(
+                            'Esta acción eliminará definitivamente ${position.symbol} sin registrarla como cerrada.\n¿Deseas continuar?',
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.of(ctx).pop(false),
+                              child: const Text('Cancelar'),
+                            ),
+                            FilledButton(
+                              style: FilledButton.styleFrom(
+                                backgroundColor: Colors.redAccent,
+                              ),
+                              onPressed: () => Navigator.of(ctx).pop(true),
+                              child: const Text('Eliminar'),
+                            ),
+                          ],
+                        ),
+                      ) ??
+                      false;
+                  if (!confirmed) return;
+                  executor.discardPosition(position.entrySignature);
+                  notifier.removePosition(
+                    position.entrySignature,
+                    refundBudget: true,
+                    message:
+                        'Posición ${position.symbol} eliminada manualmente.',
+                  );
+                },
               ),
             ),
           )
@@ -212,6 +250,77 @@ class _SimulationResultsPageState extends ConsumerState<SimulationResultsPage> {
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+class _ScanFailureBanner extends StatelessWidget {
+  const _ScanFailureBanner({required this.message, required this.reasons});
+
+  final String message;
+  final List<String> reasons;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final surface =
+        theme.colorScheme.errorContainer.withValues(alpha: 0.85);
+    final onSurface = theme.colorScheme.onErrorContainer;
+    return SoftSurface(
+      color: surface,
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.search_off_rounded, color: theme.colorScheme.error),
+              const SizedBox(width: 8),
+              Text(
+                'Escaneo sin coincidencias',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  color: onSurface,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            message,
+            style: theme.textTheme.bodyMedium?.copyWith(color: onSurface),
+          ),
+          if (reasons.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            ...reasons.map(
+              (reason) => Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '•',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: onSurface,
+                        height: 1.2,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        reason,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: onSurface,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -708,7 +817,8 @@ class _PositionTile extends StatelessWidget {
                     _CircleIconButton(
                       tooltip: 'Eliminar posición',
                       icon: Icons.delete_outline,
-                      onPressed: position.isClosing ? null : onRemove,
+                      color: Colors.redAccent,
+                      onPressed: onRemove,
                     ),
                 ],
               ),
@@ -1066,19 +1176,21 @@ class _CircleIconButton extends StatelessWidget {
     required this.tooltip,
     required this.icon,
     required this.onPressed,
+    this.color,
   });
 
   final String tooltip;
   final IconData icon;
   final VoidCallback? onPressed;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final baseColor = theme.colorScheme.surfaceContainerHighest.withValues(
-      alpha: 0.4,
-    );
-    final glow = theme.colorScheme.primary;
+    final glow = color ?? theme.colorScheme.primary;
+    final baseColor = color == null
+        ? theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.4)
+        : glow.withValues(alpha: 0.2);
     final style =
         IconButton.styleFrom(
           backgroundColor: baseColor,
