@@ -36,11 +36,26 @@ class TransactionAuditLogger {
     'website',
   ];
 
+  io.File? _cachedFile;
+  Future<void>? _headerReady;
+
   io.File _resolveFile() {
     // Same folder as the running process (best-effort on desktop/dev runs)
     final dir = io.Directory.current.path;
     final path = '$dir${io.Platform.pathSeparator}results.csv';
     return io.File(path);
+  }
+
+  Future<io.File> _prepareFile() async {
+    final file = _cachedFile ??= _resolveFile();
+    _headerReady ??= _ensureHeader(file);
+    try {
+      await _headerReady;
+    } catch (_) {
+      _headerReady = null;
+      rethrow;
+    }
+    return file;
   }
 
   String get _delimiter => io.Platform.isWindows ? ';' : ',';
@@ -81,8 +96,7 @@ class TransactionAuditLogger {
     double? entryPriceSol,
   }) async {
     if (kIsWeb) return; // No filesystem on web
-    final file = _resolveFile();
-    await _ensureHeader(file);
+    final file = await _prepareFile();
     final solscan = 'https://solscan.io/tx/$signature';
     final row = [
       DateTime.now().toIso8601String(),
@@ -122,8 +136,7 @@ class TransactionAuditLogger {
     PositionAlertType? reason,
   }) async {
     if (kIsWeb) return;
-    final file = _resolveFile();
-    await _ensureHeader(file);
+    final file = await _prepareFile();
     final solscan = 'https://solscan.io/tx/$signature';
     final row = [
       DateTime.now().toIso8601String(),

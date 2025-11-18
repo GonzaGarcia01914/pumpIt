@@ -22,9 +22,10 @@ const _tokenRefreshCooldown = Duration(seconds: 10);
 const _jupiterMaxLamports = 5000000000;
 const _jupiterMaxSol = _jupiterMaxLamports / _lamportsPerSol;
 const _rentExemptionBufferSol = 0.003;
-const _walletBalanceThrottle = Duration(seconds: 5);
-const _walletInsufficientRetryDelay = Duration(seconds: 12);
+const _walletBalanceThrottle = Duration(minutes: 1);
+const _walletInsufficientRetryDelay = Duration(minutes: 1);
 const _autoSellRetryDelay = Duration(seconds: 5);
+const _scheduleCheckDebounce = Duration(milliseconds: 200);
 
 class AutoInvestExecutor {
   AutoInvestExecutor(
@@ -49,72 +50,70 @@ class AutoInvestExecutor {
   final Set<String> _positionsSelling = {};
   final Map<String, DateTime> _tokenAmountRequests = {};
   final Set<String> _pendingAutoSellRetries = {};
+  Timer? _scheduledCheck;
+  Timer? _walletRetryTimer;
   DateTime? _lastWalletBalanceCheck;
   double? _lastWalletBalanceSol;
   DateTime? _walletInsufficientUntil;
   String? _lastWalletWarning;
 
   void init() {
-    ref.listen<AutoInvestState>(
-      autoInvestProvider,
-      (previous, next) {
-        if (_shouldScheduleFromAutoInvest(previous, next)) {
-          _scheduleCheck();
-        }
-      },
-    );
-    ref.listen<FeaturedCoinState>(
-      featuredCoinProvider,
-      (_, __) => _scheduleCheck(),
-    );
+    ref.listen<AutoInvestState>(autoInvestProvider, (previous, next) {
+      final becameEnabled =
+          (previous == null || !previous.isEnabled) && next.isEnabled;
+      final walletJustConnected =
+          previous?.walletAddress == null && next.walletAddress != null;
+      if (becameEnabled || walletJustConnected) {
+        _resetWalletBalanceCache();
+      }
+      if (!_isRunnableState(next)) {
+        _cancelPendingCheck();
+        _cancelWalletRetryTimer();
+        return;
+      }
+      final shouldTrigger = previous == null
+          ? true
+          : _didRelevantStateChange(previous, next);
+      if (!shouldTrigger) {
+        return;
+      }
+      final immediate = becameEnabled || walletJustConnected;
+      _scheduleCheck(immediate: immediate);
+    }, fireImmediately: true);
+    ref.listen<FeaturedCoinState>(featuredCoinProvider, (_, __) {
+      if (!_shouldAttemptSchedule()) {
+        return;
+      }
+      _scheduleCheck();
+    });
   }
 
-  bool _shouldScheduleFromAutoInvest(
-    AutoInvestState? previous,
-    AutoInvestState next,
-  ) {
-    if (!next.isEnabled || next.walletAddress == null) {
-      return false;
+  void _scheduleCheck({bool immediate = false}) {
+    if (!_shouldAttemptSchedule()) {
+      if (immediate) {
+        _cancelPendingCheck();
+      }
+      return;
     }
-    if (previous == null) {
-      return true;
+    if (_isRunning && !immediate) {
+      _rerunPending = true;
+      return;
     }
-    if (!previous.isEnabled && next.isEnabled) {
-      return true;
+    if (immediate) {
+      _cancelPendingCheck();
+      _runScheduledCheck();
+      return;
     }
-    if (previous.walletAddress != next.walletAddress) {
-      return true;
+    if (_scheduledCheck != null) {
+      return;
     }
-    if (previous.positions.length != next.positions.length) {
-      return true;
-    }
-    if (previous.availableBudgetSol != next.availableBudgetSol ||
-        previous.totalBudgetSol != next.totalBudgetSol ||
-        previous.perCoinBudgetSol != next.perCoinBudgetSol) {
-      return true;
-    }
-    if (previous.executionMode != next.executionMode) {
-      return true;
-    }
-    if (previous.includeManualMints != next.includeManualMints) {
-      return true;
-    }
-    if (!listEquals(previous.manualMints, next.manualMints)) {
-      return true;
-    }
-    if (previous.minMarketCap != next.minMarketCap ||
-        previous.maxMarketCap != next.maxMarketCap ||
-        previous.minVolume24h != next.minVolume24h ||
-        previous.maxVolume24h != next.maxVolume24h ||
-        previous.minReplies != next.minReplies ||
-        previous.maxAgeHours != next.maxAgeHours ||
-        previous.preferNewest != next.preferNewest) {
-      return true;
-    }
-    return false;
+    _scheduledCheck = Timer(_scheduleCheckDebounce, () {
+      _scheduledCheck = null;
+      _runScheduledCheck();
+    });
   }
 
-  void _scheduleCheck() {
+  void _runScheduledCheck() {
     final autoState = ref.read(autoInvestProvider);
     _cleanupFailedEntries(autoState);
     if (!autoState.isEnabled || autoState.walletAddress == null) {
@@ -131,15 +130,38 @@ class AutoInvestExecutor {
     Future(() async {
       try {
         await _evaluate();
+      } catch (error, stackTrace) {
+        ref
+            .read(autoInvestProvider.notifier)
+            .setStatus('AutoInvest falló: $error');
+        if (kDebugMode) {
+          debugPrint('AutoInvestExecutor _evaluate error: $error');
+          debugPrintStack(stackTrace: stackTrace);
+        }
       } finally {
         _isRunning = false;
         if (_rerunPending) {
           _rerunPending = false;
-          _scheduleCheck();
+          _scheduleCheck(immediate: true);
         }
       }
     });
   }
+
+  bool _shouldAttemptSchedule() {
+    final state = ref.read(autoInvestProvider);
+    if (!_isRunnableState(state)) {
+      return false;
+    }
+    final until = _walletInsufficientUntil;
+    if (until != null && DateTime.now().isBefore(until)) {
+      return false;
+    }
+    return true;
+  }
+
+  bool _isRunnableState(AutoInvestState state) =>
+      state.isEnabled && state.walletAddress != null;
 
   Future<void> _evaluate() async {
     final autoState = ref.read(autoInvestProvider);
@@ -249,10 +271,10 @@ class AutoInvestExecutor {
     }
 
     notifier.setStatus(
-          autoState.executionMode == AutoInvestExecutionMode.jupiter
-              ? 'Preparando compra automática de ${candidate.symbol} (${entrySolUsed.toStringAsFixed(4)} SOL) vía Jupiter.'
-              : 'Preparando compra automática de ${candidate.symbol} (${entrySolUsed.toStringAsFixed(4)} SOL) vía PumpPortal.',
-        );
+      autoState.executionMode == AutoInvestExecutionMode.jupiter
+          ? 'Preparando compra automática de ${candidate.symbol} (${entrySolUsed.toStringAsFixed(4)} SOL) vía Jupiter.'
+          : 'Preparando compra automática de ${candidate.symbol} (${entrySolUsed.toStringAsFixed(4)} SOL) vía PumpPortal.',
+    );
     var budgetReserved = false;
     String? pendingSignature;
     try {
@@ -512,14 +534,10 @@ class AutoInvestExecutor {
     return value.toString();
   }
 
-  double _totalWalletRequirement(
-    AutoInvestState autoState,
-    double entrySol,
-  ) {
-    final buffer =
-        autoState.executionMode == AutoInvestExecutionMode.pumpPortal
-            ? autoState.pumpPriorityFeeSol + _rentExemptionBufferSol
-            : _rentExemptionBufferSol;
+  double _totalWalletRequirement(AutoInvestState autoState, double entrySol) {
+    final buffer = autoState.executionMode == AutoInvestExecutionMode.pumpPortal
+        ? autoState.pumpPriorityFeeSol + _rentExemptionBufferSol
+        : _rentExemptionBufferSol;
     return entrySol + buffer;
   }
 
@@ -536,10 +554,11 @@ class AutoInvestExecutor {
     final now = DateTime.now();
     final cachedBalance = _lastWalletBalanceSol;
     final lastCheck = _lastWalletBalanceCheck;
-    final hasFreshCache = cachedBalance != null &&
+    final hasFreshCache =
+        cachedBalance != null &&
         lastCheck != null &&
         now.difference(lastCheck) <= _walletBalanceThrottle;
-    if (hasFreshCache && cachedBalance! >= totalRequiredSol) {
+    if (hasFreshCache && cachedBalance >= totalRequiredSol) {
       _lastWalletWarning = null;
       _walletInsufficientUntil = null;
       return true;
@@ -556,6 +575,7 @@ class AutoInvestExecutor {
     }
     if (balance == null) {
       _walletInsufficientUntil = now.add(_walletInsufficientRetryDelay);
+      _scheduleWalletRetry(_walletInsufficientUntil!);
       final message =
           'No se pudo leer el saldo de la wallet; se cancela la entrada automática.';
       if (_lastWalletWarning != message) {
@@ -599,6 +619,7 @@ class AutoInvestExecutor {
     required DateTime now,
   }) {
     _walletInsufficientUntil = now.add(_walletInsufficientRetryDelay);
+    _scheduleWalletRetry(_walletInsufficientUntil!);
     _lastWalletBalanceSol = balance;
     final message =
         'Saldo disponible (${balance.toStringAsFixed(4)} SOL) insuficiente para una nueva entrada '
@@ -627,6 +648,31 @@ class AutoInvestExecutor {
     _lastWalletBalanceSol = null;
     _walletInsufficientUntil = null;
     _lastWalletWarning = null;
+    _cancelWalletRetryTimer();
+  }
+
+  void _cancelPendingCheck() {
+    _scheduledCheck?.cancel();
+    _scheduledCheck = null;
+  }
+
+  void _cancelWalletRetryTimer() {
+    _walletRetryTimer?.cancel();
+    _walletRetryTimer = null;
+  }
+
+  void _scheduleWalletRetry(DateTime until) {
+    _walletRetryTimer?.cancel();
+    final delay = until.difference(DateTime.now());
+    if (delay.isNegative || delay == Duration.zero) {
+      _walletRetryTimer = null;
+      _scheduleCheck(immediate: true);
+      return;
+    }
+    _walletRetryTimer = Timer(delay, () {
+      _walletRetryTimer = null;
+      _scheduleCheck(immediate: true);
+    });
   }
 
   void _cleanupRecent() {
@@ -654,7 +700,7 @@ class AutoInvestExecutor {
         refundBudget: true,
       );
       if (removed) {
-        _recentMints[mint] = DateTime.now();
+        _recentMints.remove(mint);
         failedBuys.remove(position.entrySignature);
       }
       if (failedBuys.isEmpty) {
@@ -682,8 +728,9 @@ class AutoInvestExecutor {
         continue;
       }
       final resolvedMint = execution.mint.isNotEmpty ? execution.mint : mint;
-      final resolvedSymbol =
-          execution.symbol.isNotEmpty ? execution.symbol : symbol;
+      final resolvedSymbol = execution.symbol.isNotEmpty
+          ? execution.symbol
+          : symbol;
       return _PendingBuy(
         mint: resolvedMint,
         symbol: resolvedSymbol,
@@ -853,24 +900,20 @@ class AutoInvestExecutor {
       } catch (_) {
         pumpQuote = null;
       }
-      final signature = await (_shouldSellViaJupiter(
-        position: activePosition,
-        quote: pumpQuote,
-      )
-          ? _executeSellViaJupiter(
-              autoState,
-              activePosition,
-              tokenAmount,
-            )
-          : _executeSellViaPumpPortal(
-              autoState,
-              activePosition,
-              tokenAmount,
-            ));
-      double expectedSol =
-          pumpQuote != null
-              ? tokenAmount * pumpQuote.priceSol
-              : activePosition.currentValueSol ?? activePosition.entrySol;
+      final signature =
+          await (_shouldSellViaJupiter(
+                position: activePosition,
+                quote: pumpQuote,
+              )
+              ? _executeSellViaJupiter(autoState, activePosition, tokenAmount)
+              : _executeSellViaPumpPortal(
+                  autoState,
+                  activePosition,
+                  tokenAmount,
+                ));
+      double expectedSol = pumpQuote != null
+          ? tokenAmount * pumpQuote.priceSol
+          : activePosition.currentValueSol ?? activePosition.entrySol;
       double? preBalance;
       if (preBalanceFuture != null) {
         try {
@@ -921,10 +964,7 @@ class AutoInvestExecutor {
       notifier.setStatus('Venta falló (${activePosition.symbol}): $error');
       if (reason != null) {
         unawaited(
-          _scheduleAutoSellRetry(
-            position: activePosition,
-            reason: reason,
-          ),
+          _scheduleAutoSellRetry(position: activePosition, reason: reason),
         );
       }
     }
@@ -1014,11 +1054,7 @@ class AutoInvestExecutor {
           );
       return;
     }
-    await sellPosition(
-      refreshed,
-      reason: reason,
-      ignoreRetryThrottle: true,
-    );
+    await sellPosition(refreshed, reason: reason, ignoreRetryThrottle: true);
   }
 
   Future<bool> _shouldRetryAutoSell(
@@ -1049,8 +1085,7 @@ class AutoInvestExecutor {
         return state.takeProfitPercent > 0 &&
             pnlPercent >= state.takeProfitPercent;
       }
-      return state.stopLossPercent > 0 &&
-          pnlPercent <= -state.stopLossPercent;
+      return state.stopLossPercent > 0 && pnlPercent <= -state.stopLossPercent;
     } catch (error) {
       ref
           .read(autoInvestProvider.notifier)
@@ -1072,7 +1107,8 @@ class AutoInvestExecutor {
       notifier.updateExecutionStatus(signature, status: 'confirmed');
       final consumed = _consumePendingBuy(signature);
       final pending =
-          consumed ?? _fallbackPendingBuyFromExecutions(
+          consumed ??
+          _fallbackPendingBuyFromExecutions(
             signature: signature,
             mint: mint,
             symbol: symbol,
@@ -1132,12 +1168,11 @@ class AutoInvestExecutor {
       final pending = _consumePendingBuy(signature);
       if (pending != null) {
         notifier.releaseBudgetReservation(pending.solAmount);
-        _recentMints[pending.mint] = DateTime.now();
+        _recentMints.remove(pending.mint);
       } else {
         notifier.removePosition(signature, refundBudget: true);
-        _recentMints[mint] = DateTime.now();
+        _recentMints.remove(mint);
       }
-
     }
   }
 
@@ -1156,8 +1191,9 @@ class AutoInvestExecutor {
         expectedSol: expectedSol,
         preBalanceSol: preBalanceSol,
       );
-      final exitFeeSol =
-          realizedSol < expectedSol ? (expectedSol - realizedSol) : null;
+      final exitFeeSol = realizedSol < expectedSol
+          ? (expectedSol - realizedSol)
+          : null;
       notifier.completePositionSale(
         position: position,
         sellSignature: signature,
@@ -1210,7 +1246,10 @@ class AutoInvestExecutor {
     if (owner == null) {
       throw Exception('Wallet sin propietario para leer salida.');
     }
-    final solDelta = await _retryReadSolDelta(signature: signature, owner: owner);
+    final solDelta = await _retryReadSolDelta(
+      signature: signature,
+      owner: owner,
+    );
     if (solDelta != null) {
       return solDelta;
     }
@@ -1274,6 +1313,43 @@ class AutoInvestExecutor {
     }
     return null;
   }
+
+  void dispose() {
+    _cancelPendingCheck();
+    _cancelWalletRetryTimer();
+  }
+
+  bool _didRelevantStateChange(AutoInvestState previous, AutoInvestState next) {
+    if (previous.isEnabled != next.isEnabled) return true;
+    if (previous.walletAddress != next.walletAddress) return true;
+    if (previous.availableBudgetSol != next.availableBudgetSol) return true;
+    if (previous.walletBalanceSol != next.walletBalanceSol) return true;
+    if (previous.perCoinBudgetSol != next.perCoinBudgetSol) return true;
+    if (previous.executionMode != next.executionMode) return true;
+    if (previous.pumpSlippagePercent != next.pumpSlippagePercent) return true;
+    if (previous.pumpPriorityFeeSol != next.pumpPriorityFeeSol) return true;
+    if (previous.pumpPool != next.pumpPool) return true;
+    if (previous.minMarketCap != next.minMarketCap) return true;
+    if (previous.maxMarketCap != next.maxMarketCap) return true;
+    if (previous.minReplies != next.minReplies) return true;
+    if (previous.maxAgeHours != next.maxAgeHours) return true;
+    if (previous.includeManualMints != next.includeManualMints) return true;
+    if (!_manualMintsEqual(previous.manualMints, next.manualMints)) return true;
+    return false;
+  }
+
+  bool _manualMintsEqual(List<String> a, List<String> b) {
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (_normalizeMint(a[i]) != _normalizeMint(b[i])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  String _normalizeMint(String value) => value.trim().toLowerCase();
 }
 
 class _PendingBuy {
@@ -1323,5 +1399,6 @@ final autoInvestExecutorProvider = Provider<AutoInvestExecutor>((ref) {
     ref.watch(pumpFunPriceServiceProvider),
   );
   executor.init();
+  ref.onDispose(executor.dispose);
   return executor;
 });
