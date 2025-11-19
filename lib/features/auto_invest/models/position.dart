@@ -35,6 +35,9 @@ class OpenPosition extends Equatable {
     this.entryFeeSol,
     this.exitFeeSol,
     this.isClosing = false,
+    this.partialSalePercent = 0,
+    this.triggeredSaleLevels = const [],
+    this.maxPnlPercentReached,
   });
 
   final String mint;
@@ -55,6 +58,9 @@ class OpenPosition extends Equatable {
   final double? entryFeeSol;
   final double? exitFeeSol;
   final bool isClosing;
+  final double partialSalePercent;
+  final List<double> triggeredSaleLevels; // PnL % de niveles ya activados
+  final double? maxPnlPercentReached; // Máximo PnL alcanzado (para trailing stop)
 
   bool get hasTokenAmount => tokenAmount != null && tokenAmount! > 0;
 
@@ -75,6 +81,9 @@ class OpenPosition extends Equatable {
     Object? entryFeeSol = _copySentinel,
     Object? exitFeeSol = _copySentinel,
     Object? isClosing = _copySentinel,
+    double? partialSalePercent,
+    List<double>? triggeredSaleLevels,
+    Object? maxPnlPercentReached = _copySentinel,
   }) {
     return OpenPosition(
       mint: mint,
@@ -119,6 +128,11 @@ class OpenPosition extends Equatable {
       isClosing: identical(isClosing, _copySentinel)
           ? this.isClosing
           : isClosing as bool,
+      partialSalePercent: partialSalePercent ?? this.partialSalePercent,
+      triggeredSaleLevels: triggeredSaleLevels ?? this.triggeredSaleLevels,
+      maxPnlPercentReached: identical(maxPnlPercentReached, _copySentinel)
+          ? this.maxPnlPercentReached
+          : maxPnlPercentReached as double?,
     );
   }
 
@@ -141,6 +155,9 @@ class OpenPosition extends Equatable {
     'entryFeeSol': entryFeeSol,
     'exitFeeSol': exitFeeSol,
     'isClosing': isClosing,
+    'partialSalePercent': partialSalePercent,
+    'triggeredSaleLevels': triggeredSaleLevels,
+    'maxPnlPercentReached': maxPnlPercentReached,
   };
 
   factory OpenPosition.fromJson(Map<String, dynamic> json) {
@@ -183,6 +200,13 @@ class OpenPosition extends Equatable {
       entryFeeSol: (json['entryFeeSol'] as num?)?.toDouble(),
       exitFeeSol: (json['exitFeeSol'] as num?)?.toDouble(),
       isClosing: json['isClosing'] as bool? ?? false,
+      partialSalePercent: (json['partialSalePercent'] as num?)?.toDouble() ?? 0,
+      triggeredSaleLevels: (json['triggeredSaleLevels'] as List<dynamic>?)
+              ?.map((e) => (e as num).toDouble())
+              .toList() ??
+          const [],
+      maxPnlPercentReached:
+          (json['maxPnlPercentReached'] as num?)?.toDouble(),
     );
   }
 
@@ -206,6 +230,7 @@ class OpenPosition extends Equatable {
     entryFeeSol,
     exitFeeSol,
     isClosing,
+    partialSalePercent,
   ];
 }
 
@@ -312,6 +337,36 @@ class ClosedPosition extends Equatable {
       entryFeeSol: (json['entryFeeSol'] as num?)?.toDouble(),
       exitFeeSol: (json['exitFeeSol'] as num?)?.toDouble(),
       netPnlSol: (json['netPnlSol'] as num?)?.toDouble(),
+    );
+  }
+
+  ClosedPosition copyWith({
+    double? exitSol,
+    double? exitPriceSol,
+    double? pnlSol,
+    double? pnlPercent,
+    double? exitFeeSol,
+    double? netPnlSol,
+  }) {
+    return ClosedPosition(
+      mint: mint,
+      symbol: symbol,
+      executionMode: executionMode,
+      entrySol: entrySol,
+      exitSol: exitSol ?? this.exitSol,
+      tokenAmount: tokenAmount,
+      entryPriceSol: entryPriceSol,
+      exitPriceSol: exitPriceSol ?? this.exitPriceSol,
+      pnlSol: pnlSol ?? this.pnlSol,
+      pnlPercent: pnlPercent ?? this.pnlPercent,
+      openedAt: openedAt,
+      closedAt: closedAt,
+      buySignature: buySignature,
+      sellSignature: sellSignature,
+      closeReason: closeReason,
+      entryFeeSol: entryFeeSol,
+      exitFeeSol: exitFeeSol ?? this.exitFeeSol,
+      netPnlSol: netPnlSol ?? this.netPnlSol,
     );
   }
 

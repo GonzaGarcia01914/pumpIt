@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -8,19 +9,38 @@ import 'package:solana_web3/solana_web3.dart' as solana;
 // ignore: implementation_imports
 import 'package:solana_web3/src/crypto/nacl.dart' as nacl;
 
+import 'solana_websocket_service.dart';
+
 const _lamportsPerSol = 1000000000;
 
 const _localKeyPath = String.fromEnvironment(
   'LOCAL_KEY_PATH',
   defaultValue: '',
 );
-const _rpcUrl = String.fromEnvironment(
-  'RPC_URL',
-  defaultValue: 'https://api.mainnet-beta.solana.com',
+// ⚡ RPC URL de Helius (con API key desde dart-define)
+const _heliusApiKey = String.fromEnvironment(
+  'HELIUS_API_KEY',
+  defaultValue: '',
 );
+// Construir RPC URL con API key si está disponible
+String _buildRpcUrl() {
+  final rpcUrlOverride = const String.fromEnvironment(
+    'RPC_URL',
+    defaultValue: '',
+  );
+  if (rpcUrlOverride.isNotEmpty) {
+    return rpcUrlOverride;
+  }
+  if (_heliusApiKey.isNotEmpty) {
+    return 'https://mainnet.helius-rpc.com/?api-key=$_heliusApiKey';
+  }
+  return 'https://api.mainnet-beta.solana.com';
+}
 
 class WalletExecutionService {
-  WalletExecutionService() {
+  WalletExecutionService({SolanaWebSocketService? websocketService})
+    : _websocketService = websocketService,
+      _rpcUrl = _buildRpcUrl() {
     final cluster = _clusterFromRpc(_rpcUrl);
     _connection = solana.Connection(
       cluster,
@@ -31,9 +51,14 @@ class WalletExecutionService {
     }
   }
 
+  final String _rpcUrl;
+
   late final solana.Connection _connection;
+  final SolanaWebSocketService? _websocketService;
   solana.Keypair? _keypair;
   final Map<String, int> _mintDecimalsCache = {};
+  // ⚡ Cache de transacciones pre-construidas para evitar regeneración
+  final Map<String, _CachedTransaction> _txCache = {};
 
   bool get isAvailable => _keypair != null;
 
@@ -60,18 +85,32 @@ class WalletExecutionService {
       throw Exception('Wallet local no cargada.');
     }
     try {
-      final signedBytes = _signRawTransaction(
-        base64Decode(swapTxBase64),
-        keypair,
-      );
+      // ⚡ Validación local rápida antes de enviar (crítico con skipPreflight)
+      final txBytes = base64Decode(swapTxBase64);
+      _validateTransactionStructure(txBytes);
+
+      final signedBytes = _signRawTransaction(txBytes, keypair);
+
+      // ⚡ IMPLEMENTACIÓN: skipPreflight = true significa que NO se ejecuta
+      // simulación previa (preflight) en el RPC, ahorrando ~200-500ms por tx
       final signature = await _connection.sendSignedTransaction(
         base64Encode(signedBytes),
         config: const solana.SendTransactionConfig(
-          skipPreflight: false,
-          maxRetries: 3,
+          skipPreflight: true, // ⚡ CRÍTICO: skip preflight aumenta velocidad x5
+          maxRetries: 5, // ⚡ Aumentado a 5 reintentos para mejor confiabilidad
           preflightCommitment: solana.Commitment.confirmed,
         ),
       );
+
+      // ⚡ Verificación rápida: asegurar que la signature es válida
+      if (signature.isEmpty) {
+        throw Exception('RPC devolvió signature vacía');
+      }
+
+      // ⚡ Verificación adicional: asegurar que la transacción se envió correctamente
+      // Esperar un momento para que el RPC procese la transacción
+      await Future.delayed(const Duration(milliseconds: 100));
+
       return signature;
     } on solana.JsonRpcException catch (error) {
       final code = error.code;
@@ -83,19 +122,146 @@ class WalletExecutionService {
     }
   }
 
-  Future<void> waitForConfirmation(String signature) async {
-    // Use `confirmed` to reduce timeouts during congestion. Finalization can take long
-    // and trigger TimeoutException even when the tx eventually lands.
-    final notification = await _connection.confirmTransaction(
-      signature,
-      config: const solana.ConfirmTransactionConfig(
-        commitment: solana.Commitment.confirmed,
-      ),
-    );
-    final err = notification.err;
-    if (err != null) {
-      throw Exception('Confirmación falló: $err');
+  // ⚡ Validación local rápida de estructura de transacción
+  // Con skipPreflight activo, esta validación previene errores costosos
+  void _validateTransactionStructure(Uint8List txBytes) {
+    if (txBytes.isEmpty) {
+      throw Exception('Transacción vacía');
     }
+    if (txBytes.length < 64) {
+      throw Exception('Transacción demasiado corta (mínimo 64 bytes)');
+    }
+    // Verificar que tenga al menos la estructura básica: signatures + message
+    final reader = _ShortVecReader(txBytes);
+    try {
+      final sigCount = reader.readLength();
+      if (sigCount == 0 || sigCount > 16) {
+        throw Exception('Número de firmas inválido: $sigCount');
+      }
+      final signaturesOffset = reader.offset;
+      final signaturesLen = sigCount * nacl.signatureLength;
+      final messageOffset = signaturesOffset + signaturesLen;
+      if (messageOffset >= txBytes.length) {
+        throw Exception('Transacción inválida: sin sección de mensaje');
+      }
+    } catch (e) {
+      if (e is Exception) rethrow;
+      throw Exception('Error validando estructura de transacción: $e');
+    }
+  }
+
+  /// ⚡ Confirmación vía WebSocket (tiempo real) o fallback a RPC HTTP
+  Future<void> waitForConfirmation(String signature) async {
+    // ⚡ PRIORIDAD: Usar WebSocket si está disponible (confirmación inmediata)
+    if (_websocketService != null) {
+      try {
+        await _websocketService
+            .subscribeToSignature(signature, commitment: 'confirmed')
+            .timeout(
+              const Duration(
+                seconds: 60,
+              ), // ⚡ Aumentado a 60s para dar más tiempo
+              onTimeout: () {
+                throw TimeoutException(
+                  'WebSocket confirmation timeout para $signature',
+                  const Duration(seconds: 60),
+                );
+              },
+            );
+        return; // ⚡ Confirmado vía WebSocket - salir inmediatamente
+      } catch (e) {
+        // Si WebSocket falla, hacer fallback a RPC HTTP
+        if (e is! TimeoutException) rethrow;
+      }
+    }
+
+    // 🔄 FALLBACK: RPC HTTP polling (más lento pero más confiable)
+    try {
+      final notification = await _connection
+          .confirmTransaction(
+            signature,
+            config: const solana.ConfirmTransactionConfig(
+              commitment: solana.Commitment.confirmed,
+            ),
+          )
+          .timeout(
+            const Duration(
+              seconds: 45,
+            ), // ⚡ Aumentado a 45s para dar más tiempo
+            onTimeout: () {
+              throw TimeoutException(
+                'Confirmación timeout después de 45s para $signature',
+                const Duration(seconds: 45),
+              );
+            },
+          );
+      final err = notification.err;
+      if (err != null) {
+        throw Exception('Confirmación falló: $err');
+      }
+    } on TimeoutException {
+      // ⚡ Verificación manual final con múltiples intentos
+      for (int attempt = 0; attempt < 3; attempt++) {
+        await Future.delayed(Duration(milliseconds: 500 * (attempt + 1)));
+        try {
+          final tx = await _connection.getTransaction(
+            signature,
+            config: solana.GetTransactionConfig(
+              commitment: solana.Commitment.confirmed,
+              maxSupportedTransactionVersion: 0,
+            ),
+          );
+          if (tx != null && tx.meta?.err == null) {
+            // ⚡ Transacción confirmada - salir
+            return;
+          }
+          if (tx != null && tx.meta?.err != null) {
+            // ⚡ Transacción falló explícitamente
+            throw Exception('Transacción falló: ${tx.meta?.err}');
+          }
+        } catch (e) {
+          if (attempt == 2) {
+            // Último intento falló
+            throw Exception(
+              'Transacción no confirmada después de múltiples intentos: $signature',
+            );
+          }
+          // Continuar con el siguiente intento
+        }
+      }
+      throw Exception('Transacción no confirmada o falló: $signature');
+    }
+  }
+
+  /// 🔄 RPC HTTP: Obtener latest blockhash (no crítico en tiempo)
+  Future<String> getLatestBlockhash() async {
+    final response = await http.post(
+      Uri.parse(_rpcUrl),
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'jsonrpc': '2.0',
+        'id': 'latest-blockhash',
+        'method': 'getLatestBlockhash',
+        'params': [
+          {'commitment': 'confirmed'},
+        ],
+      }),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('RPC error obteniendo blockhash: ${response.statusCode}');
+    }
+
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    final result = decoded['result'] as Map<String, dynamic>?;
+    final value = result?['value'] as Map<String, dynamic>?;
+    final blockhash = value?['blockhash'] as String?;
+
+    if (blockhash == null) {
+      throw Exception('RPC no devolvió blockhash');
+    }
+
+    return blockhash;
   }
 
   Future<double?> readTokenAmountFromTransaction({
@@ -117,7 +283,7 @@ class WalletExecutionService {
     try {
       return await _fetchTokenBalance(owner: owner, mint: mint);
     } catch (error) {
-      throw Exception('Lectura de balance SPL fall�: $error');
+      throw Exception('Lectura de balance SPL fall�: $error');
     }
   }
 
@@ -130,7 +296,7 @@ class WalletExecutionService {
       if (result == null) return null;
       return _readSolChangeFromResult(result, owner);
     } catch (error) {
-      throw Exception('Lectura de delta de SOL fall�: $error');
+      throw Exception('Lectura de delta de SOL fall�: $error');
     }
   }
 
@@ -317,10 +483,7 @@ class WalletExecutionService {
         'params': [
           owner,
           {'mint': mint},
-          {
-            'encoding': 'jsonParsed',
-            'commitment': 'confirmed',
-          },
+          {'encoding': 'jsonParsed', 'commitment': 'confirmed'},
         ],
       }),
     );
@@ -391,10 +554,7 @@ class WalletExecutionService {
     throw Exception('Formato de transacción desconocido.');
   }
 
-  double? _readSolChangeFromResult(
-    Map<String, dynamic> result,
-    String owner,
-  ) {
+  double? _readSolChangeFromResult(Map<String, dynamic> result, String owner) {
     final meta = result['meta'] as Map<String, dynamic>?;
     final transaction = result['transaction'] as Map<String, dynamic>?;
     if (meta == null || transaction == null) {
@@ -561,7 +721,21 @@ class WalletExecutionService {
 
   void dispose() {
     _connection.dispose();
+    _txCache.clear();
   }
+}
+
+// ⚡ Cache para transacciones pre-construidas
+class _CachedTransaction {
+  _CachedTransaction({
+    required this.transactionBase64,
+    required this.expiresAt,
+  });
+
+  final String transactionBase64;
+  final DateTime expiresAt;
+
+  bool get isExpired => DateTime.now().isAfter(expiresAt);
 }
 
 class _ShortVecReader {

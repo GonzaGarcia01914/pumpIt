@@ -9,11 +9,19 @@ import '../../featured_coins/models/featured_coin.dart';
 import '../models/execution_record.dart';
 import '../models/execution_mode.dart';
 import '../models/position.dart';
+import '../models/sale_level.dart';
 import '../services/jupiter_swap_service.dart';
 import '../services/pump_fun_price_service.dart';
 import '../services/pump_portal_trade_service.dart';
 import '../services/wallet_execution_service.dart';
 import '../services/transaction_audit_logger.dart';
+import '../services/helius_enhanced_api_service.dart';
+import '../services/dynamic_priority_fee_service.dart';
+import '../services/dynamic_slippage_service.dart';
+import '../services/entry_timing_analyzer.dart';
+import '../services/error_handler_service.dart';
+import '../services/token_security_analyzer.dart';
+import '../services/whale_tracker_service.dart';
 import 'auto_invest_notifier.dart';
 
 const _lamportsPerSol = 1000000000;
@@ -260,6 +268,11 @@ class AutoInvestExecutor {
       }
     }
 
+    // ⚡ Verificar límites diarios antes de comprar
+    if (!_checkDailyLimits(autoState, entrySolUsed, isBuy: true)) {
+      return;
+    }
+
     final totalRequiredSol = _totalWalletRequirement(autoState, entrySolUsed);
     final hasWalletSol = await _hasEnoughWalletSol(
       autoState: autoState,
@@ -270,30 +283,232 @@ class AutoInvestExecutor {
       return;
     }
 
+    // 🛡️ Verificar seguridad del token ANTES de comprar
+    notifier.setStatus('Analizando seguridad de ${candidate.symbol}...');
+    final isSafe = await _verifyTokenSecurityAsync(candidate);
+    if (!isSafe) {
+      // Token no es seguro, cancelar compra
+      return;
+    }
+
+    // 🐋 Analizar actividad de whales/insiders ANTES de comprar
+    final securityService = ref.read(tokenSecurityAnalyzerProvider);
+    TokenSecurityScore? securityScore;
+    try {
+      securityScore = await securityService
+          .analyzeToken(candidate.mint)
+          .timeout(const Duration(seconds: 2));
+    } catch (e) {
+      // Si falla o timeout, continuar sin análisis de seguridad
+      securityScore = null;
+    }
+    final creatorAddress = securityScore?.creatorAddress;
+
     notifier.setStatus(
-      autoState.executionMode == AutoInvestExecutionMode.jupiter
-          ? 'Preparando compra automática de ${candidate.symbol} (${entrySolUsed.toStringAsFixed(4)} SOL) vía Jupiter.'
-          : 'Preparando compra automática de ${candidate.symbol} (${entrySolUsed.toStringAsFixed(4)} SOL) vía PumpPortal.',
+      'Analizando actividad de whales en ${candidate.symbol}...',
     );
+    final whaleAnalysis = await _analyzeWhaleActivity(
+      mint: candidate.mint,
+      creatorAddress: creatorAddress,
+    );
+
+    // 🐋 DECISIÓN BASADA EN ACTIVIDAD DE WHALES
+    if (whaleAnalysis.recommendation == WhaleRecommendation.strongSell) {
+      // Creator vendiendo o muchas ventas de whales grandes - NO COMPRAR
+      final reason = whaleAnalysis.hasCreatorSells
+          ? 'Creator está vendiendo'
+          : 'Muchas ventas de whales grandes detectadas';
+      notifier.setStatus(
+        '⚠️ Cancelando compra de ${candidate.symbol}: $reason',
+      );
+      _recentMints[candidate.mint] = DateTime.now();
+      return;
+    }
+
+    if (whaleAnalysis.recommendation == WhaleRecommendation.sell) {
+      // Algunas ventas de whales - ADVERTENCIA pero continuar
+      notifier.setStatus(
+        '⚠️ Advertencia: Algunas ventas de whales detectadas en ${candidate.symbol}, pero continuando...',
+      );
+    }
+
+    if (whaleAnalysis.recommendation == WhaleRecommendation.strongBuy) {
+      // Whales grandes comprando - SEÑAL POSITIVA
+      notifier.setStatus(
+        '🐋 Señal positiva: Whales grandes comprando ${candidate.symbol}',
+      );
+    }
+
+    // ⚡ CRÍTICO: Marcar mint como "en proceso" ANTES de intentar comprar
+    // Esto evita que se intente comprar el mismo token múltiples veces simultáneamente
+    _recentMints[candidate.mint] = DateTime.now();
+    _pendingMints.add(candidate.mint);
+
     var budgetReserved = false;
     String? pendingSignature;
     try {
       notifier.reserveBudgetForEntry(entrySolUsed);
       budgetReserved = true;
-      // Precio de referencia al momento de la entrada (SOL por token)
-      final pumpQuote = await priceService.fetchQuote(candidate.mint);
-      final signature = switch (autoState.executionMode) {
-        AutoInvestExecutionMode.jupiter => await _executeViaJupiter(
-          autoState,
-          candidate,
-          lamports,
-        ),
-        AutoInvestExecutionMode.pumpPortal => await _executeViaPumpPortal(
-          autoState,
-          candidate,
-        ),
-      };
+
+      // ⚡ Precio de referencia con timeout para evitar bloqueos
+      PumpFunQuote? pumpQuote;
+      try {
+        notifier.setStatus('Obteniendo precio para ${candidate.symbol}...');
+        pumpQuote = await priceService
+            .fetchQuote(candidate.mint)
+            .timeout(
+              const Duration(seconds: 10),
+              onTimeout: () {
+                throw TimeoutException(
+                  'Timeout obteniendo precio para ${candidate!.symbol}',
+                );
+              },
+            );
+      } catch (e) {
+        // Si falla obtener precio, continuar de todas formas (no es crítico)
+        notifier.setStatus('Advertencia: No se pudo obtener precio: $e');
+        pumpQuote = null;
+      }
+
+      // 📊 ANÁLISIS DE TIMING DE ENTRADA: Verificar si es buen momento para entrar
+      if (pumpQuote != null) {
+        final timingAnalyzer = ref.read(entryTimingAnalyzerProvider);
+        final dynamicSlippageService = ref.read(dynamicSlippageServiceProvider);
+
+        // Registrar precio actual para tracking de volatilidad
+        dynamicSlippageService.recordPricePoint(
+          candidate.mint,
+          pumpQuote.priceSol,
+        );
+
+        // Registrar volumen desde la quote
+        timingAnalyzer.recordVolumeFromQuote(candidate.mint, pumpQuote);
+
+        notifier.setStatus(
+          'Analizando timing de entrada para ${candidate.symbol}...',
+        );
+        EntryTimingAnalysis? timingAnalysis;
+        try {
+          timingAnalysis = await timingAnalyzer
+              .analyzeEntryTiming(
+                mint: candidate.mint,
+                currentPrice: pumpQuote.priceSol,
+                currentVolume: pumpQuote
+                    .marketCapSol, // Usar market cap como proxy de volumen
+                currentQuote: pumpQuote,
+              )
+              .timeout(const Duration(seconds: 3));
+        } catch (e) {
+          // Si falla o timeout, continuar sin análisis de timing
+          timingAnalysis = null;
+        }
+
+        if (timingAnalysis != null) {
+          if (!timingAnalysis.shouldEnter) {
+            // No es buen momento para entrar
+            final waitTime = timingAnalysis.recommendedWaitTime;
+            if (waitTime != null && waitTime.inSeconds < 60) {
+              // Esperar un poco y reintentar
+              notifier.setStatus(
+                '⏳ Esperando mejor timing para ${candidate.symbol}: ${timingAnalysis.reason} (esperando ${waitTime.inSeconds}s)',
+              );
+              await Future.delayed(waitTime);
+
+              // Re-analizar después de esperar
+              EntryTimingAnalysis? retryAnalysis;
+              try {
+                retryAnalysis = await timingAnalyzer
+                    .analyzeEntryTiming(
+                      mint: candidate.mint,
+                      currentPrice: pumpQuote.priceSol,
+                      currentVolume: pumpQuote.marketCapSol,
+                      currentQuote: pumpQuote,
+                    )
+                    .timeout(const Duration(seconds: 2));
+              } catch (e) {
+                // Si falla, continuar con la compra
+                retryAnalysis = null;
+              }
+
+              if (retryAnalysis != null && !retryAnalysis.shouldEnter) {
+                // Aún no es buen momento, cancelar
+                notifier.setStatus(
+                  '❌ Cancelando compra de ${candidate.symbol}: ${retryAnalysis.reason}',
+                );
+                _recentMints[candidate.mint] = DateTime.now();
+                return;
+              }
+            } else {
+              // Espera muy larga o no recomendada, cancelar
+              notifier.setStatus(
+                '❌ Cancelando compra de ${candidate.symbol}: ${timingAnalysis.reason}',
+              );
+              _recentMints[candidate.mint] = DateTime.now();
+              return;
+            }
+          } else {
+            // Es buen momento para entrar
+            notifier.setStatus(
+              '✅ Buen timing para ${candidate.symbol} (score: ${timingAnalysis.entryScore.toStringAsFixed(1)}/100): ${timingAnalysis.reason}',
+            );
+          }
+        }
+      }
+
+      notifier.setStatus(
+        autoState.executionMode == AutoInvestExecutionMode.jupiter
+            ? 'Preparando compra automática de ${candidate.symbol} (${entrySolUsed.toStringAsFixed(4)} SOL) vía Jupiter.'
+            : 'Preparando compra automática de ${candidate.symbol} (${entrySolUsed.toStringAsFixed(4)} SOL) vía PumpPortal.',
+      );
+
+      // ⚡ Obtener blockhash fresco con timeout (opcional, no crítico)
+      // Nota: PumpPortal/Jupiter obtienen el blockhash ellos mismos, así que esto es solo
+      // para pre-calentar la conexión RPC. Si falla, no es crítico.
+      try {
+        // ignore: avoid_dynamic_calls
+        await (wallet as dynamic).getLatestBlockhash().timeout(
+          const Duration(seconds: 3), // ⚡ Reducido a 3s, no es crítico
+          onTimeout: () {
+            throw TimeoutException('Timeout obteniendo blockhash');
+          },
+        );
+      } catch (e) {
+        // Si falla obtener blockhash, continuar de todas formas
+        // (PumpPortal/Jupiter pueden obtenerlo ellos mismos)
+        // No mostrar advertencia para no spamear logs
+      }
+
+      // ⚡ Ejecutar compra con timeout total y logging detallado
+      notifier.setStatus(
+        'Construyendo transacción para ${candidate.symbol}...',
+      );
+      final signature =
+          await (switch (autoState.executionMode) {
+            AutoInvestExecutionMode.jupiter => _executeViaJupiter(
+              autoState,
+              candidate,
+              lamports,
+            ),
+            AutoInvestExecutionMode.pumpPortal => _executeViaPumpPortal(
+              autoState,
+              candidate,
+            ),
+          }).timeout(
+            const Duration(
+              seconds: 30,
+            ), // ⚡ Timeout total de 30s para toda la operación
+            onTimeout: () {
+              throw TimeoutException(
+                'Timeout ejecutando compra de ${candidate!.symbol} después de 30s',
+              );
+            },
+          );
       pendingSignature = signature;
+
+      // ⚡ Log de éxito en envío
+      notifier.setStatus(
+        'Transacción de compra enviada para ${candidate.symbol} (sig: ${signature.substring(0, 8)}...)',
+      );
       final pending = _PendingBuy(
         mint: candidate.mint,
         symbol: candidate.symbol,
@@ -301,7 +516,19 @@ class AutoInvestExecutor {
         executionMode: autoState.executionMode,
       );
       _pendingBuys[signature] = pending;
-      _pendingMints.add(candidate.mint);
+      // ⚡ _pendingMints ya fue agregado al inicio del proceso
+
+      // ⚡ ACTUALIZACIÓN INMEDIATA: Agregar a posiciones abiertas inmediatamente
+      // No esperar confirmación - la UI se actualiza instantáneamente
+      notifier.recordPositionEntry(
+        mint: candidate.mint,
+        symbol: candidate.symbol,
+        solAmount: entrySolUsed,
+        txSignature: signature,
+        executionMode: autoState.executionMode,
+        subtractBudget: false, // Ya se reservó con reserveBudgetForEntry
+      );
+
       // Registro de auditoría (CSV) para compras
       unawaited(
         ref
@@ -311,7 +538,8 @@ class AutoInvestExecutor {
               signature: signature,
               entrySol: entrySolUsed,
               mode: autoState.executionMode,
-              entryPriceSol: pumpQuote.priceSol,
+              state: autoState,
+              entryPriceSol: pumpQuote!.priceSol,
             ),
       );
       notifier.recordExecution(
@@ -324,19 +552,76 @@ class AutoInvestExecutor {
           executedAt: DateTime.now(),
         ),
       );
+      // ⚡ En background: Actualizar con datos reales cuando se confirme
       unawaited(
         _trackConfirmation(signature, candidate.symbol, candidate.mint),
       );
     } catch (error) {
+      // ⚡ Si la compra falla después de actualización inmediata, revertir
       if (pendingSignature != null) {
+        // Remover posición agregada inmediatamente
+        notifier.removePosition(pendingSignature, refundBudget: true);
         final pending = _consumePendingBuy(pendingSignature);
         if (pending != null) {
           notifier.releaseBudgetReservation(pending.solAmount);
-          _recentMints.remove(pending.mint);
         }
       } else if (budgetReserved) {
         notifier.releaseBudgetReservation(entrySolUsed);
       }
+
+      // ⚡ Si falla antes de enviar la transacción, remover del tracking
+      // para que pueda reintentarse después del cooldown (no inmediatamente)
+      _pendingMints.remove(candidate.mint);
+
+      // 📊 MANEJO INTELIGENTE DE ERRORES: Analizar error y obtener recomendación
+      final errorHandler = ref.read(errorHandlerServiceProvider);
+      final context = 'buy_${candidate.mint}';
+      final analysis = errorHandler.analyzeError(error, context: context);
+
+      // Aplicar recomendación según el análisis
+      switch (analysis.action) {
+        case ErrorAction.retryFast:
+          // Cooldown corto para errores temporales
+          _recentMints[candidate.mint] = DateTime.now().subtract(
+            const Duration(minutes: 14, seconds: 30),
+          );
+          notifier.setStatus('⏳ ${analysis.message} Reintentará en ~30s.');
+          break;
+
+        case ErrorAction.retryWithHigherFee:
+          // Cooldown corto pero con fee más alto en el siguiente intento
+          _recentMints[candidate.mint] = DateTime.now().subtract(
+            const Duration(minutes: 14, seconds: 30),
+          );
+          notifier.setStatus(
+            '💰 ${analysis.message} Reintentará con fee ${analysis.feeMultiplier?.toStringAsFixed(1)}x más alto.',
+          );
+          break;
+
+        case ErrorAction.retrySlow:
+          // Cooldown normal
+          notifier.setStatus(
+            '⚠️ ${analysis.message} Reintentará después del cooldown.',
+          );
+          break;
+
+        case ErrorAction.doNotRetry:
+          // No reintentar - error permanente
+          _recentMints[candidate.mint] = DateTime.now();
+          notifier.setStatus('❌ ${analysis.message}');
+          break;
+
+        case ErrorAction.pauseTemporarily:
+          // Circuit breaker activado - pausar
+          final pauseDuration =
+              analysis.pauseDuration ?? const Duration(minutes: 5);
+          _recentMints[candidate.mint] = DateTime.now();
+          notifier.setStatus(
+            '🛑 Circuit breaker activado para ${candidate.symbol}. Pausando por ${pauseDuration.inMinutes} minutos.',
+          );
+          break;
+      }
+
       notifier.recordExecutionError(candidate.symbol, error.toString());
     }
   }
@@ -375,6 +660,61 @@ class AutoInvestExecutor {
   bool _isMintBlocked(String mint) =>
       _recentMints.containsKey(mint) || _pendingMints.contains(mint);
 
+  /// ⚡ Verificar límites diarios (max loss y max earning)
+  bool _checkDailyLimits(
+    AutoInvestState state,
+    double solAmount, {
+    required bool isBuy,
+  }) {
+    if (state.maxLossPerDay <= 0 && state.maxEarningPerDay <= 0) {
+      return true; // Sin límites configurados
+    }
+
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    // Calcular PnL diario desde posiciones cerradas hoy
+    double dailyPnL = 0.0;
+    for (final closed in state.closedPositions) {
+      if (closed.closedAt.isAfter(today) ||
+          closed.closedAt.isAtSameMomentAs(today)) {
+        dailyPnL += closed.pnlSol;
+      }
+    }
+
+    // Si es venta, estimar el PnL que generaría
+    if (!isBuy) {
+      // El PnL de la venta se calculará después, pero podemos estimar
+      // basándonos en el expectedSol vs entrySol
+      // Por ahora, solo verificamos el PnL acumulado hasta ahora
+    }
+
+    // Verificar límite de pérdidas diarias
+    if (state.maxLossPerDay > 0 && dailyPnL < 0) {
+      final loss = -dailyPnL;
+      if (loss >= state.maxLossPerDay) {
+        final notifier = ref.read(autoInvestProvider.notifier);
+        notifier.setStatus(
+          'Límite de pérdidas diarias alcanzado (${loss.toStringAsFixed(3)} SOL >= ${state.maxLossPerDay.toStringAsFixed(3)} SOL).',
+        );
+        return false;
+      }
+    }
+
+    // Verificar límite de ganancias diarias
+    if (state.maxEarningPerDay > 0 && dailyPnL > 0) {
+      if (dailyPnL >= state.maxEarningPerDay) {
+        final notifier = ref.read(autoInvestProvider.notifier);
+        notifier.setStatus(
+          'Límite de ganancias diarias alcanzado (${dailyPnL.toStringAsFixed(3)} SOL >= ${state.maxEarningPerDay.toStringAsFixed(3)} SOL).',
+        );
+        return false;
+      }
+    }
+
+    return true;
+  }
+
   _ScanReport _scanFeaturedCoins(
     List<FeaturedCoin> coins,
     AutoInvestState autoState,
@@ -386,36 +726,88 @@ class AutoInvestExecutor {
     var filteredByAge = 0;
     var filteredByCooldown = 0;
     var filteredByHeld = 0;
+    var filteredByMaxTokens = 0;
+    var filteredBySecurity = 0;
     final heldMints = {
       for (final position in autoState.positions) position.mint,
     };
+
+    // ⚡ Límite de tokens simultáneos
+    if (autoState.maxTokensSimultaneous > 0 &&
+        autoState.positions.length >= autoState.maxTokensSimultaneous) {
+      return _ScanReport(
+        total: coins.length,
+        eligible: 0,
+        filteredByMarketCap: 0,
+        filteredByReplies: 0,
+        filteredByAge: 0,
+        filteredByHeld: 0,
+        filteredByCooldown: 0,
+        filteredByMaxTokens: coins.length,
+        filteredBySecurity: 0,
+        candidate: null,
+      );
+    }
+
     FeaturedCoin? candidate;
     for (final coin in coins) {
+      // ⚡ FILTRO 1: Market Cap
       if (coin.usdMarketCap < autoState.minMarketCap ||
           coin.usdMarketCap > autoState.maxMarketCap) {
         filteredByMarketCap++;
         continue;
       }
+
+      // ⚡ FILTRO 2: Replies
       if (autoState.minReplies > 0 &&
           coin.replyCount.toDouble() < autoState.minReplies) {
         filteredByReplies++;
         continue;
       }
-      if (autoState.maxAgeHours > 0) {
-        final ageHours = now.difference(coin.createdAt).inMinutes / 60.0;
-        if (ageHours > autoState.maxAgeHours) {
-          filteredByAge++;
-          continue;
-        }
+
+      // ⚡ FILTRO 3: Edad con unidad configurable (min/h) y rango min/max
+      // ⚡ CORREGIDO: Asegurar que el cálculo de edad sea correcto
+      final ageInMinutes = now.difference(coin.createdAt).inMinutes;
+      // Si la edad es negativa (fecha futura), usar 0
+      final safeAgeInMinutes = ageInMinutes < 0 ? 0 : ageInMinutes;
+      double ageInSelectedUnit;
+      if (autoState.ageTimeUnit == TimeUnit.minutes) {
+        ageInSelectedUnit = safeAgeInMinutes.toDouble();
+      } else {
+        ageInSelectedUnit = safeAgeInMinutes / 60.0;
       }
+
+      // ⚡ CORREGIDO: Aplicar filtros de edad correctamente
+      // Si minAgeValue > 0, la edad debe ser >= minAgeValue
+      if (autoState.minAgeValue > 0 &&
+          ageInSelectedUnit < autoState.minAgeValue) {
+        filteredByAge++;
+        continue;
+      }
+      // Si maxAgeValue > 0, la edad debe ser <= maxAgeValue
+      if (autoState.maxAgeValue > 0 &&
+          ageInSelectedUnit > autoState.maxAgeValue) {
+        filteredByAge++;
+        continue;
+      }
+
+      // ⚡ FILTRO 4: Ya tiene posición abierta
       if (heldMints.contains(coin.mint)) {
         filteredByHeld++;
         continue;
       }
+
+      // ⚡ FILTRO 5: Cooldown (intentos recientes)
       if (_isMintBlocked(coin.mint)) {
         filteredByCooldown++;
         continue;
       }
+
+      // 🛡️ FILTRO 6: Análisis de seguridad (rug pulls/honeypots)
+      // ⚡ Por ahora, el análisis se hace de forma asíncrona antes de comprar
+      // No bloqueamos aquí para mantener el proceso rápido
+
+      // ⚡ Si pasa todos los filtros, es elegible
       eligible++;
       candidate ??= coin;
     }
@@ -427,6 +819,8 @@ class AutoInvestExecutor {
       filteredByAge: filteredByAge,
       filteredByHeld: filteredByHeld,
       filteredByCooldown: filteredByCooldown,
+      filteredByMaxTokens: filteredByMaxTokens,
+      filteredBySecurity: filteredBySecurity,
       candidate: candidate,
     );
   }
@@ -441,8 +835,16 @@ class AutoInvestExecutor {
     if (autoState.minReplies > 0) {
       buffer.write(' | replies >= ${autoState.minReplies.toStringAsFixed(0)}');
     }
-    if (autoState.maxAgeHours > 0) {
-      buffer.write(' | edad <= ${autoState.maxAgeHours.toStringAsFixed(0)}h');
+    // ⚡ CORREGIDO: Usar los nuevos campos de edad (minAgeValue, maxAgeValue, ageTimeUnit)
+    if (autoState.minAgeValue > 0 || autoState.maxAgeValue > 0) {
+      final unitLabel = autoState.ageTimeUnit == TimeUnit.minutes ? 'min' : 'h';
+      final minLabel = autoState.minAgeValue > 0
+          ? ' >= ${autoState.minAgeValue.toStringAsFixed(0)}$unitLabel'
+          : '';
+      final maxLabel = autoState.maxAgeValue > 0
+          ? ' <= ${autoState.maxAgeValue.toStringAsFixed(0)}$unitLabel'
+          : '';
+      buffer.write(' | edad$minLabel$maxLabel');
     }
     buffer.write(
       report.hasCandidate && report.candidate != null
@@ -473,10 +875,21 @@ class AutoInvestExecutor {
         '(${autoState.minReplies.toStringAsFixed(0)}).',
       );
     }
-    if (autoState.maxAgeHours > 0 && report.filteredByAge > 0) {
+    if (report.filteredByAge > 0) {
+      final unitLabel = autoState.ageTimeUnit == TimeUnit.minutes ? 'min' : 'h';
+      final minLabel = autoState.minAgeValue > 0
+          ? ' >= ${autoState.minAgeValue.toStringAsFixed(0)}$unitLabel'
+          : '';
+      final maxLabel = autoState.maxAgeValue > 0
+          ? ' <= ${autoState.maxAgeValue.toStringAsFixed(0)}$unitLabel'
+          : '';
       reasons.add(
-        '${report.filteredByAge} superan las '
-        '${autoState.maxAgeHours.toStringAsFixed(0)}h desde el deploy.',
+        '${report.filteredByAge} fuera del rango de edad$minLabel$maxLabel.',
+      );
+    }
+    if (report.filteredByMaxTokens > 0) {
+      reasons.add(
+        'Límite de tokens simultáneos alcanzado (${autoState.maxTokensSimultaneous}).',
       );
     }
     if (report.filteredByHeld > 0) {
@@ -498,33 +911,145 @@ class AutoInvestExecutor {
     FeaturedCoin candidate,
     int lamports,
   ) async {
-    final quote = await jupiter.fetchQuote(
-      inputMint: JupiterSwapService.solMint,
-      outputMint: candidate.mint,
-      amountLamports: lamports,
-    );
-    final swap = await jupiter.swap(
-      route: quote.route,
-      userPublicKey: autoState.walletAddress!,
-    );
-    return wallet.signAndSendBase64(swap.swapTransaction);
+    // ⚡ Timeouts para evitar bloqueos
+    final quote = await jupiter
+        .fetchQuote(
+          inputMint: JupiterSwapService.solMint,
+          outputMint: candidate.mint,
+          amountLamports: lamports,
+        )
+        .timeout(
+          const Duration(seconds: 15),
+          onTimeout: () {
+            throw TimeoutException(
+              'Timeout obteniendo quote de Jupiter para ${candidate.symbol}',
+            );
+          },
+        );
+
+    final swap = await jupiter
+        .swap(route: quote.route, userPublicKey: autoState.walletAddress!)
+        .timeout(
+          const Duration(seconds: 15),
+          onTimeout: () {
+            throw TimeoutException(
+              'Timeout construyendo swap de Jupiter para ${candidate.symbol}',
+            );
+          },
+        );
+
+    return await wallet
+        .signAndSendBase64(swap.swapTransaction)
+        .timeout(
+          const Duration(seconds: 10),
+          onTimeout: () {
+            throw TimeoutException(
+              'Timeout enviando transacción de ${candidate.symbol}',
+            );
+          },
+        );
   }
 
   Future<String> _executeViaPumpPortal(
     AutoInvestState autoState,
-    FeaturedCoin candidate,
-  ) async {
-    final base64Tx = await pumpPortal.buildTradeTransaction(
-      action: 'buy',
-      publicKey: autoState.walletAddress!,
-      mint: candidate.mint,
-      amount: _formatAmount(autoState.perCoinBudgetSol),
-      denominatedInSol: true,
-      slippagePercent: autoState.pumpSlippagePercent,
-      priorityFeeSol: autoState.pumpPriorityFeeSol,
-      pool: autoState.pumpPool,
-    );
-    return wallet.signAndSendBase64(base64Tx);
+    FeaturedCoin candidate, {
+    bool isRetry = false,
+    bool previousFailure = false,
+  }) async {
+    // 🚀 PRIORITY FEES DINÁMICOS: Calcular fee óptimo basado en red y competencia
+    final dynamicFeeService = ref.read(dynamicPriorityFeeServiceProvider);
+    final optimalFee = await dynamicFeeService
+        .calculateOptimalFee(
+          baseFee: autoState.pumpPriorityFeeSol,
+          mint: candidate.mint,
+          isRetry: isRetry,
+          previousFailure: previousFailure,
+        )
+        .timeout(
+          const Duration(seconds: 2),
+          onTimeout: () =>
+              autoState.pumpPriorityFeeSol, // Fallback a fee base si timeout
+        );
+
+    // 📊 SLIPPAGE DINÁMICO: Calcular slippage óptimo basado en condiciones del mercado
+    final dynamicSlippageService = ref.read(dynamicSlippageServiceProvider);
+
+    // Obtener precio actual y liquidez para calcular slippage
+    PumpFunQuote? currentQuote;
+    try {
+      currentQuote = await priceService
+          .fetchQuote(candidate.mint)
+          .timeout(const Duration(seconds: 3));
+    } catch (e) {
+      // Si falla, usar slippage base
+    }
+
+    final optimalSlippage = await dynamicSlippageService
+        .calculateOptimalSlippage(
+          SlippageCalculationParams(
+            baseSlippagePercent: autoState.pumpSlippagePercent,
+            orderSizeSol: autoState.perCoinBudgetSol,
+            currentPriceSol: currentQuote?.priceSol ?? 0,
+            liquiditySol: currentQuote?.liquiditySol,
+            priceHistory: dynamicSlippageService.getPriceHistory(
+              candidate.mint,
+            ),
+          ),
+        )
+        .timeout(
+          const Duration(seconds: 2),
+          onTimeout: () =>
+              autoState.pumpSlippagePercent, // Fallback a slippage base
+        );
+
+    // Registrar precio actual para tracking de volatilidad
+    if (currentQuote != null) {
+      dynamicSlippageService.recordPricePoint(
+        candidate.mint,
+        currentQuote.priceSol,
+      );
+    }
+
+    // ⚡ OPTIMIZACIÓN: Jito bundles para saltar al frente del bloque
+    // ⚡ Timeouts para evitar bloqueos
+    final base64Tx = await pumpPortal
+        .buildTradeTransaction(
+          action: 'buy',
+          publicKey: autoState.walletAddress!,
+          mint: candidate.mint,
+          amount: _formatAmount(autoState.perCoinBudgetSol),
+          denominatedInSol: true,
+          slippagePercent:
+              optimalSlippage, // ⚡ Usar slippage dinámico calculado
+          priorityFeeSol: optimalFee, // ⚡ Usar fee dinámico calculado
+          pool: autoState.pumpPool,
+          skipPreflight: true, // ⚡ Skip preflight para velocidad
+          jitoOnly: true, // ⚡ Jito bundles para prioridad en el bloque
+        )
+        .timeout(
+          const Duration(seconds: 15),
+          onTimeout: () {
+            throw TimeoutException(
+              'Timeout construyendo transacción en PumpPortal para ${candidate.symbol}',
+            );
+          },
+        );
+
+    final signature = await wallet
+        .signAndSendBase64(base64Tx)
+        .timeout(
+          const Duration(seconds: 10),
+          onTimeout: () {
+            throw TimeoutException(
+              'Timeout enviando transacción de ${candidate.symbol}',
+            );
+          },
+        );
+
+    // 📝 Registrar intento de transacción (para detectar gas wars)
+    dynamicFeeService.recordTxAttempt(candidate.mint, optimalFee);
+
+    return signature;
   }
 
   String _formatAmount(double value) {
@@ -862,6 +1387,80 @@ class AutoInvestExecutor {
           _findPosition(position.entrySignature) ??
           position.copyWith(tokenAmount: tokenAmount);
     }
+
+    // ⚡ VENTAS ESCALONADAS: Calcular cuánto vender según el nivel alcanzado
+    final autoState = ref.read(autoInvestProvider);
+    double salePercent = 100.0;
+    SaleLevel? triggeredLevel;
+
+    // Obtener PnL actual para determinar qué nivel se alcanzó
+    final currentPnlPercent = activePosition.pnlPercent;
+    if (currentPnlPercent == null) {
+      notifier.setStatus(
+        'No se puede calcular PnL para ${activePosition.symbol}',
+      );
+      return;
+    }
+
+    if (reason == PositionAlertType.takeProfit) {
+      if (autoState.takeProfitLevels.isNotEmpty) {
+        // Buscar el nivel más alto alcanzado
+        // Los niveles están ordenados de menor a mayor PnL
+        for (final level in autoState.takeProfitLevels.reversed) {
+          if (currentPnlPercent >= level.pnlPercent) {
+            // Verificar que este nivel no haya sido activado antes
+            if (!activePosition.triggeredSaleLevels.contains(
+              level.pnlPercent,
+            )) {
+              triggeredLevel = level;
+              salePercent = level.sellPercent;
+              break;
+            }
+          }
+        }
+        // Si no se encontró nivel, usar 100% (vender todo)
+        if (triggeredLevel == null) {
+          salePercent = 100.0;
+        }
+      } else {
+        // Fallback al comportamiento antiguo
+        if (autoState.takeProfitPartialPercent < 100) {
+          salePercent = autoState.takeProfitPartialPercent;
+        }
+      }
+    } else if (reason == PositionAlertType.stopLoss) {
+      if (autoState.stopLossLevels.isNotEmpty) {
+        // Buscar el nivel más bajo alcanzado
+        // Los niveles están ordenados de mayor a menor PnL (más negativo primero)
+        for (final level in autoState.stopLossLevels.reversed) {
+          if (currentPnlPercent <= level.pnlPercent) {
+            // Verificar que este nivel no haya sido activado antes
+            if (!activePosition.triggeredSaleLevels.contains(
+              level.pnlPercent,
+            )) {
+              triggeredLevel = level;
+              salePercent = level.sellPercent;
+              break;
+            }
+          }
+        }
+        // Si no se encontró nivel, usar 100% (vender todo)
+        if (triggeredLevel == null) {
+          salePercent = 100.0;
+        }
+      } else {
+        // Fallback al comportamiento antiguo
+        if (autoState.stopLossPartialPercent < 100) {
+          salePercent = autoState.stopLossPartialPercent;
+        }
+      }
+    }
+
+    // ⚡ VENTAS ESCALONADAS: El porcentaje del nivel es del restante actual
+    // El tokenAmount ya refleja las ventas anteriores, así que aplicar el porcentaje directamente
+
+    // Calcular la cantidad de tokens a vender
+    final tokensToSell = tokenAmount * (salePercent / 100.0);
     if (_positionsSelling.contains(activePosition.entrySignature) ||
         activePosition.isClosing) {
       notifier.setStatus(
@@ -869,7 +1468,15 @@ class AutoInvestExecutor {
       );
       return;
     }
-    final autoState = ref.read(autoInvestProvider);
+
+    // ⚡ Verificar límites diarios antes de vender
+    final expectedSolFromSale = activePosition.currentValueSol != null
+        ? activePosition.currentValueSol! * (salePercent / 100.0)
+        : activePosition.entrySol * (salePercent / 100.0);
+    if (!_checkDailyLimits(autoState, expectedSolFromSale, isBuy: false)) {
+      return;
+    }
+
     final walletAddress = autoState.walletAddress;
     if (walletAddress == null) {
       notifier.setStatus(
@@ -893,27 +1500,119 @@ class AutoInvestExecutor {
       final preBalanceFuture = walletAddress == null
           ? null
           : wallet.getWalletBalance(walletAddress);
-      final priceFuture = priceService.fetchQuote(activePosition.mint);
+
+      // ⚡ MEJORADA: Obtener quote con mejor manejo de errores y detección de graduación
       PumpFunQuote? pumpQuote;
+      bool isGraduated = false;
       try {
-        pumpQuote = await priceFuture;
-      } catch (_) {
+        pumpQuote = await priceService
+            .fetchQuote(activePosition.mint)
+            .timeout(
+              const Duration(seconds: 10),
+              onTimeout: () {
+                throw TimeoutException(
+                  'Timeout obteniendo precio para ${activePosition.symbol}',
+                );
+              },
+            );
+        isGraduated = pumpQuote.isGraduated;
+      } catch (e) {
+        // Si fetchQuote falla, intentar detectar si está graduado
+        // Los tokens graduados a menudo retornan 404 o errores específicos
+        final errorStr = e.toString().toLowerCase();
+        if (errorStr.contains('404') ||
+            errorStr.contains('not found') ||
+            errorStr.contains('complete') ||
+            errorStr.contains('graduated')) {
+          isGraduated = true;
+          notifier.setStatus(
+            'Token ${activePosition.symbol} parece estar graduado, usando Jupiter para venta.',
+          );
+        }
         pumpQuote = null;
       }
-      final signature =
-          await (_shouldSellViaJupiter(
-                position: activePosition,
-                quote: pumpQuote,
-              )
-              ? _executeSellViaJupiter(autoState, activePosition, tokenAmount)
-              : _executeSellViaPumpPortal(
-                  autoState,
-                  activePosition,
-                  tokenAmount,
-                ));
+
+      // ⚡ VENTA CON FALLBACK: Intentar PumpPortal primero, si falla y parece graduado, usar Jupiter
+      String signature;
+
+      if (_shouldSellViaJupiter(position: activePosition, quote: pumpQuote) ||
+          isGraduated) {
+        // Usar Jupiter directamente si está graduado o si el modo es Jupiter
+        signature =
+            await _executeSellViaJupiter(
+              autoState,
+              activePosition,
+              tokensToSell,
+            ).timeout(
+              const Duration(seconds: 30),
+              onTimeout: () {
+                throw TimeoutException(
+                  'Timeout ejecutando venta vía Jupiter para ${activePosition.symbol}',
+                );
+              },
+            );
+      } else {
+        // Intentar PumpPortal primero
+        try {
+          signature =
+              await _executeSellViaPumpPortal(
+                autoState,
+                activePosition,
+                tokensToSell,
+              ).timeout(
+                const Duration(seconds: 30),
+                onTimeout: () {
+                  throw TimeoutException(
+                    'Timeout ejecutando venta vía PumpPortal para ${activePosition.symbol}',
+                  );
+                },
+              );
+        } catch (pumpPortalError) {
+          // ⚡ FALLBACK: Si PumpPortal falla, puede ser que el token se graduó
+          // Intentar con Jupiter como fallback
+          final errorStr = pumpPortalError.toString().toLowerCase();
+          final mightBeGraduated =
+              errorStr.contains('404') ||
+              errorStr.contains('not found') ||
+              errorStr.contains('complete') ||
+              errorStr.contains('graduated') ||
+              errorStr.contains('invalid') ||
+              (pumpPortalError is PumpPortalApiException &&
+                  (pumpPortalError.statusCode == 404 ||
+                      pumpPortalError.statusCode == 400));
+
+          if (mightBeGraduated) {
+            notifier.setStatus(
+              'PumpPortal falló para ${activePosition.symbol}, intentando con Jupiter (token puede estar graduado)...',
+            );
+            try {
+              signature =
+                  await _executeSellViaJupiter(
+                    autoState,
+                    activePosition,
+                    tokensToSell,
+                  ).timeout(
+                    const Duration(seconds: 30),
+                    onTimeout: () {
+                      throw TimeoutException(
+                        'Timeout ejecutando venta vía Jupiter (fallback) para ${activePosition.symbol}',
+                      );
+                    },
+                  );
+            } catch (jupiterError) {
+              // Si Jupiter también falla, lanzar el error original de PumpPortal
+              throw pumpPortalError;
+            }
+          } else {
+            // Si no parece ser un error de graduación, lanzar el error original
+            rethrow;
+          }
+        }
+      }
       double expectedSol = pumpQuote != null
-          ? tokenAmount * pumpQuote.priceSol
-          : activePosition.currentValueSol ?? activePosition.entrySol;
+          ? tokensToSell * pumpQuote.priceSol
+          : (activePosition.currentValueSol ?? activePosition.entrySol) *
+                (salePercent / 100.0);
       double? preBalance;
       if (preBalanceFuture != null) {
         try {
@@ -922,6 +1621,38 @@ class AutoInvestExecutor {
           preBalance = null;
         }
       }
+
+      // ⚡ ACTUALIZACIÓN INMEDIATA: Remover de posiciones abiertas y liberar fondos
+      // No esperar confirmación - la UI se actualiza instantáneamente
+      final isPartialSale = salePercent < 100.0;
+      // ⚡ Marcar nivel como activado si es una venta escalonada
+      final triggeredLevelPnl = triggeredLevel?.pnlPercent;
+      notifier.completePositionSaleImmediate(
+        position: activePosition,
+        sellSignature: signature,
+        expectedSol: expectedSol > 0 ? expectedSol : activePosition.entrySol,
+        isPartialSale: isPartialSale,
+        salePercent: salePercent,
+        tokensSold: tokensToSell,
+        triggeredLevelPnl: triggeredLevelPnl,
+      );
+
+      // ⚡ CRÍTICO PARA VENTAS ESCALONADAS: Liberar bloqueo inmediatamente para ventas parciales
+      // Esto permite que la siguiente venta escalonada se ejecute sin esperar confirmación
+      if (isPartialSale) {
+        // Para ventas parciales, liberar el bloqueo inmediatamente
+        // La confirmación se procesará en background sin bloquear nuevas ventas
+        _positionsSelling.remove(activePosition.entrySignature);
+        notifier.setPositionClosing(activePosition.entrySignature, false);
+      }
+      // Para ventas completas, el bloqueo se libera en _trackSellConfirmation.finally
+
+      // ⚡ COOLDOWN: Si es una venta completa (no parcial), agregar cooldown inmediatamente
+      // Esto previene que se compre el mismo token inmediatamente después de venderlo
+      if (!isPartialSale) {
+        _recentMints[activePosition.mint] = DateTime.now();
+      }
+
       notifier.recordExecution(
         ExecutionRecord(
           mint: activePosition.mint,
@@ -939,7 +1670,16 @@ class AutoInvestExecutor {
       } else {
         notifier.setStatus('Venta enviada para ${activePosition.symbol}.');
       }
-      // Registro de auditor?a preliminar de venta (esperado)
+      // Obtener coin si está disponible
+      FeaturedCoin? coin;
+      try {
+        final featured = ref.read(featuredCoinProvider);
+        coin = featured.coins.firstWhere((c) => c.mint == activePosition.mint);
+      } catch (_) {
+        coin = null;
+      }
+
+      // Registro de auditoría preliminar de venta (esperado)
       unawaited(
         ref
             .read(transactionAuditLoggerProvider)
@@ -947,18 +1687,81 @@ class AutoInvestExecutor {
               position: activePosition,
               signature: signature,
               expectedExitSol: expectedSol,
+              state: autoState,
               reason: reason,
+              coin: coin,
             ),
       );
+      // ⚡ En background: Actualizar con datos reales cuando se confirme
+      // ⚡ IMPORTANTE: Para ventas parciales, esto NO debe bloquear nuevas ventas
       unawaited(
         _trackSellConfirmation(
           signature: signature,
           position: activePosition,
           expectedSol: expectedSol > 0 ? expectedSol : activePosition.entrySol,
           preBalanceSol: preBalance,
+          isPartialSale:
+              isPartialSale, // ⚡ Pasar flag para no limpiar bloqueo si ya se limpió
         ),
       );
     } catch (error) {
+      // ⚡ Si la venta falla después de actualización inmediata, revertir
+      // Buscar la última signature enviada para revertir
+      final state = ref.read(autoInvestProvider);
+      final lastExecution = state.executions
+          .where((e) => e.mint == activePosition.mint && e.side == 'sell')
+          .toList();
+
+      if (lastExecution.isNotEmpty) {
+        final lastSignature = lastExecution.last.txSignature;
+        // Revertir la actualización inmediata
+        notifier.revertFailedSale(
+          position: activePosition,
+          sellSignature: lastSignature,
+        );
+      }
+
+      // 📊 MANEJO INTELIGENTE DE ERRORES: Analizar error y obtener recomendación
+      final errorHandler = ref.read(errorHandlerServiceProvider);
+      final context = 'sell_${activePosition.mint}';
+      final analysis = errorHandler.analyzeError(error, context: context);
+
+      // Aplicar recomendación según el análisis
+      switch (analysis.action) {
+        case ErrorAction.retryFast:
+          notifier.setStatus('⏳ ${analysis.message} Reintentará en breve.');
+          break;
+
+        case ErrorAction.retryWithHigherFee:
+          notifier.setStatus(
+            '💰 ${analysis.message} Reintentará con fee ${analysis.feeMultiplier?.toStringAsFixed(1)}x más alto.',
+          );
+          break;
+
+        case ErrorAction.retrySlow:
+          notifier.setStatus(
+            '⚠️ ${analysis.message} Reintentará después del cooldown.',
+          );
+          break;
+
+        case ErrorAction.doNotRetry:
+          notifier.setStatus('❌ ${analysis.message}');
+          break;
+
+        case ErrorAction.pauseTemporarily:
+          final pauseDuration =
+              analysis.pauseDuration ?? const Duration(minutes: 5);
+          notifier.setStatus(
+            '🛑 Circuit breaker activado para venta de ${activePosition.symbol}. Pausando por ${pauseDuration.inMinutes} minutos.',
+          );
+          break;
+      }
+
+      notifier.recordExecutionError(activePosition.symbol, error.toString());
+
+      // ⚡ CRÍTICO: Limpiar bloqueo siempre en caso de error
+      // Esto permite reintentar la venta si falla
+      // Si es venta parcial y ya se limpió, remove() no hace nada (es idempotente)
       _positionsSelling.remove(activePosition.entrySignature);
       notifier.setPositionClosing(activePosition.entrySignature, false);
       notifier.setStatus('Venta falló (${activePosition.symbol}): $error');
@@ -973,19 +1776,105 @@ class AutoInvestExecutor {
   Future<String> _executeSellViaPumpPortal(
     AutoInvestState autoState,
     OpenPosition position,
-    double tokenAmount,
-  ) async {
-    final base64Tx = await pumpPortal.buildTradeTransaction(
-      action: 'sell',
-      publicKey: autoState.walletAddress!,
-      mint: position.mint,
-      amount: _formatAmount(tokenAmount),
-      denominatedInSol: false,
-      slippagePercent: autoState.pumpSlippagePercent,
-      priorityFeeSol: autoState.pumpPriorityFeeSol,
-      pool: autoState.pumpPool,
-    );
-    return wallet.signAndSendBase64(base64Tx);
+    double tokenAmount, {
+    bool isRetry = false,
+    bool previousFailure = false,
+  }) async {
+    // 🚀 PRIORITY FEES DINÁMICOS: Calcular fee óptimo basado en red y competencia
+    final dynamicFeeService = ref.read(dynamicPriorityFeeServiceProvider);
+    final optimalFee = await dynamicFeeService
+        .calculateOptimalFee(
+          baseFee: autoState.pumpPriorityFeeSol,
+          mint: position.mint,
+          isRetry: isRetry,
+          previousFailure: previousFailure,
+        )
+        .timeout(
+          const Duration(seconds: 2),
+          onTimeout: () =>
+              autoState.pumpPriorityFeeSol, // Fallback a fee base si timeout
+        );
+
+    // 📊 SLIPPAGE DINÁMICO: Calcular slippage óptimo basado en condiciones del mercado
+    final dynamicSlippageService = ref.read(dynamicSlippageServiceProvider);
+
+    // Obtener precio actual y liquidez para calcular slippage
+    PumpFunQuote? currentQuote;
+    try {
+      currentQuote = await priceService
+          .fetchQuote(position.mint)
+          .timeout(const Duration(seconds: 3));
+    } catch (e) {
+      // Si falla, usar slippage base
+    }
+
+    // Calcular tamaño de orden en SOL (aproximado)
+    final orderSizeSol = currentQuote != null
+        ? tokenAmount * currentQuote.priceSol
+        : position.entrySol; // Fallback a entry SOL
+
+    final optimalSlippage = await dynamicSlippageService
+        .calculateOptimalSlippage(
+          SlippageCalculationParams(
+            baseSlippagePercent: autoState.pumpSlippagePercent,
+            orderSizeSol: orderSizeSol,
+            currentPriceSol: currentQuote?.priceSol ?? 0,
+            liquiditySol: currentQuote?.liquiditySol,
+            priceHistory: dynamicSlippageService.getPriceHistory(position.mint),
+          ),
+        )
+        .timeout(
+          const Duration(seconds: 2),
+          onTimeout: () =>
+              autoState.pumpSlippagePercent, // Fallback a slippage base
+        );
+
+    // Registrar precio actual para tracking de volatilidad
+    if (currentQuote != null) {
+      dynamicSlippageService.recordPricePoint(
+        position.mint,
+        currentQuote.priceSol,
+      );
+    }
+
+    // ⚡ OPTIMIZACIÓN: Jito bundles + skip preflight para ventas rápidas
+    final base64Tx = await pumpPortal
+        .buildTradeTransaction(
+          action: 'sell',
+          publicKey: autoState.walletAddress!,
+          mint: position.mint,
+          amount: _formatAmount(tokenAmount),
+          denominatedInSol: false,
+          slippagePercent:
+              optimalSlippage, // ⚡ Usar slippage dinámico calculado
+          priorityFeeSol: optimalFee, // ⚡ Usar fee dinámico calculado
+          pool: autoState.pumpPool,
+          skipPreflight: true, // ⚡ Skip preflight para velocidad
+          jitoOnly: true, // ⚡ Jito bundles para prioridad en el bloque
+        )
+        .timeout(
+          const Duration(seconds: 15),
+          onTimeout: () {
+            throw TimeoutException(
+              'Timeout construyendo transacción de venta en PumpPortal para ${position.symbol}',
+            );
+          },
+        );
+    final signature = await wallet
+        .signAndSendBase64(base64Tx)
+        .timeout(
+          const Duration(seconds: 10),
+          onTimeout: () {
+            throw TimeoutException(
+              'Timeout enviando transacción de venta de ${position.symbol}',
+            );
+          },
+        );
+
+    // 📝 Registrar intento de transacción (para detectar gas wars)
+    dynamicFeeService.recordTxAttempt(position.mint, optimalFee);
+
+    return signature;
   }
 
   Future<String> _executeSellViaJupiter(
@@ -995,24 +1884,57 @@ class AutoInvestExecutor {
   ) async {
     int decimals;
     try {
-      decimals = await wallet.getMintDecimals(position.mint);
+      decimals = await wallet
+          .getMintDecimals(position.mint)
+          .timeout(
+            const Duration(seconds: 5),
+            onTimeout: () {
+              throw TimeoutException(
+                'Timeout obteniendo decimals para ${position.symbol}',
+              );
+            },
+          );
     } catch (_) {
-      decimals = 6;
+      decimals = 6; // Fallback a 6 decimals
     }
     final amountLamports = math.max(
       1,
       (tokenAmount * math.pow(10, decimals)).floor(),
     );
-    final quote = await jupiter.fetchQuote(
-      inputMint: position.mint,
-      outputMint: JupiterSwapService.solMint,
-      amountLamports: amountLamports,
-    );
-    final swap = await jupiter.swap(
-      route: quote.route,
-      userPublicKey: autoState.walletAddress!,
-    );
-    return wallet.signAndSendBase64(swap.swapTransaction);
+    final quote = await jupiter
+        .fetchQuote(
+          inputMint: position.mint,
+          outputMint: JupiterSwapService.solMint,
+          amountLamports: amountLamports,
+        )
+        .timeout(
+          const Duration(seconds: 15),
+          onTimeout: () {
+            throw TimeoutException(
+              'Timeout obteniendo quote de Jupiter para ${position.symbol}',
+            );
+          },
+        );
+    final swap = await jupiter
+        .swap(route: quote.route, userPublicKey: autoState.walletAddress!)
+        .timeout(
+          const Duration(seconds: 15),
+          onTimeout: () {
+            throw TimeoutException(
+              'Timeout construyendo swap de Jupiter para ${position.symbol}',
+            );
+          },
+        );
+    return await wallet
+        .signAndSendBase64(swap.swapTransaction)
+        .timeout(
+          const Duration(seconds: 10),
+          onTimeout: () {
+            throw TimeoutException(
+              'Timeout enviando transacción de venta vía Jupiter de ${position.symbol}',
+            );
+          },
+        );
   }
 
   bool _shouldSellViaJupiter({
@@ -1105,6 +2027,46 @@ class AutoInvestExecutor {
       await wallet.waitForConfirmation(signature);
       final notifier = ref.read(autoInvestProvider.notifier);
       notifier.updateExecutionStatus(signature, status: 'confirmed');
+
+      // ✅ Registrar éxito en el servicio de fees dinámicos
+      final dynamicFeeService = ref.read(dynamicPriorityFeeServiceProvider);
+      dynamicFeeService.recordSuccess(mint);
+
+      // 📊 REGISTRAR ÉXITO: Resetear circuit breaker para este mint
+      final errorHandler = ref.read(errorHandlerServiceProvider);
+      errorHandler.recordSuccess('buy_$mint');
+
+      // ⚡ OBTENER FEES EXACTOS POST-COMPRA (asíncrono, no bloquea)
+      // Intentar obtener fees exactos desde Helius Enhanced API
+      double? exactEntryFee;
+
+      try {
+        final heliusService = ref.read(heliusEnhancedApiServiceProvider);
+        if (heliusService != null) {
+          final txDetails = await heliusService
+              .getTransactionDetails(signature: signature)
+              .timeout(const Duration(seconds: 5), onTimeout: () => null);
+
+          if (txDetails != null) {
+            exactEntryFee = txDetails.totalFee;
+            // Actualizar entryFeeSol en la posición si existe
+            if (exactEntryFee > 0) {
+              final state = ref.read(autoInvestProvider);
+              final positionExists = state.positions.any(
+                (p) => p.entrySignature == signature,
+              );
+              if (positionExists) {
+                // Actualizar entryFeeSol usando método público
+                notifier.updatePositionEntryFee(signature, exactEntryFee);
+              }
+            }
+          }
+        }
+      } catch (_) {
+        // Si falla obtener fees exactos, no es crítico
+        // Solo mejora la precisión del tracking
+      }
+
       final consumed = _consumePendingBuy(signature);
       final pending =
           consumed ??
@@ -1113,15 +2075,26 @@ class AutoInvestExecutor {
             mint: mint,
             symbol: symbol,
           );
+      // ⚡ La posición ya fue agregada inmediatamente después de enviar la tx
+      // Solo actualizamos datos si es necesario (ej: tokenAmount real)
       if (pending != null) {
-        notifier.recordPositionEntry(
-          mint: pending.mint,
-          symbol: pending.symbol,
-          solAmount: pending.solAmount,
-          txSignature: signature,
-          executionMode: pending.executionMode,
-          subtractBudget: consumed == null,
-        );
+        // Verificar si la posición ya existe (fue agregada inmediatamente)
+        final existingPosition = ref
+            .read(autoInvestProvider)
+            .positions
+            .where((p) => p.entrySignature == signature)
+            .isNotEmpty;
+        if (!existingPosition && consumed == null) {
+          // Solo agregar si no existe (fallback por si acaso)
+          notifier.recordPositionEntry(
+            mint: pending.mint,
+            symbol: pending.symbol,
+            solAmount: pending.solAmount,
+            txSignature: signature,
+            executionMode: pending.executionMode,
+            subtractBudget: false, // Ya se reservó
+          );
+        }
         _recentMints[pending.mint] = DateTime.now();
       } else {
         _recentMints[mint] = DateTime.now();
@@ -1159,15 +2132,81 @@ class AutoInvestExecutor {
       }
     } catch (error) {
       final notifier = ref.read(autoInvestProvider.notifier);
+
+      // ⚡ Verificar si la transacción realmente falló o solo no se confirmó a tiempo
+      final isTimeout =
+          error.toString().contains('timeout') ||
+          error.toString().contains('Timeout');
+
+      if (isTimeout) {
+        // ⚡ Timeout: La transacción puede estar pendiente, verificar manualmente
+        notifier.setStatus(
+          'Confirmación timeout para $symbol. Verificando estado...',
+        );
+
+        // Verificar si la transacción realmente existe y está confirmada
+        try {
+          final owner = ref.read(autoInvestProvider).walletAddress;
+          if (owner != null) {
+            // Intentar leer el balance para ver si la compra se completó
+            final balance = await wallet.readTokenBalance(
+              owner: owner,
+              mint: mint,
+            );
+            if (balance != null && balance > 0) {
+              // ⚡ La compra se completó aunque el timeout ocurrió
+              notifier.setStatus(
+                'Compra de $symbol completada (verificada por balance)',
+              );
+              final pending = _consumePendingBuy(signature);
+              if (pending != null) {
+                _recentMints[pending.mint] = DateTime.now();
+                // Actualizar tokenAmount si la posición existe
+                try {
+                  final positionExists = ref
+                      .read(autoInvestProvider)
+                      .positions
+                      .any((p) => p.entrySignature == signature);
+                  if (positionExists) {
+                    notifier.updatePositionAmount(signature, balance);
+                  }
+                } catch (_) {
+                  // Error verificando posición, continuar
+                }
+              }
+              return; // ⚡ Salir - la compra fue exitosa
+            }
+          }
+        } catch (_) {
+          // Si la verificación falla, continuar con el manejo de error normal
+        }
+      }
+
+      // ⚡ Error real o timeout sin confirmación
+      // 🚀 Detectar si el error es por low priority
+      final errorStr = error.toString().toLowerCase();
+      final isLowPriorityError =
+          errorStr.contains('insufficient') &&
+          (errorStr.contains('priority') ||
+              errorStr.contains('fee') ||
+              errorStr.contains('prioritization'));
+
+      if (isLowPriorityError) {
+        // Registrar fallo por low priority
+        final dynamicFeeService = ref.read(dynamicPriorityFeeServiceProvider);
+        dynamicFeeService.recordLowPriorityFailure(mint);
+      }
+
       notifier.updateExecutionStatus(
         signature,
         status: 'failed',
         errorMessage: error.toString(),
       );
-      notifier.setStatus('Orden fall??? ($symbol): $error');
+      notifier.setStatus('Orden falló ($symbol): $error');
       final pending = _consumePendingBuy(signature);
       if (pending != null) {
         notifier.releaseBudgetReservation(pending.solAmount);
+        notifier.removePosition(signature, refundBudget: true);
         _recentMints.remove(pending.mint);
       } else {
         notifier.removePosition(signature, refundBudget: true);
@@ -1181,30 +2220,91 @@ class AutoInvestExecutor {
     required OpenPosition position,
     required double expectedSol,
     double? preBalanceSol,
+    bool isPartialSale = false, // ⚡ Flag para ventas parciales
   }) async {
     try {
       await wallet.waitForConfirmation(signature);
       final notifier = ref.read(autoInvestProvider.notifier);
       notifier.updateExecutionStatus(signature, status: 'confirmed');
+
+      // ✅ Registrar éxito en el servicio de fees dinámicos
+      final dynamicFeeService = ref.read(dynamicPriorityFeeServiceProvider);
+      dynamicFeeService.recordSuccess(position.mint);
+
+      // 📊 REGISTRAR ÉXITO: Resetear circuit breaker para este mint
+      final errorHandler = ref.read(errorHandlerServiceProvider);
+      errorHandler.recordSuccess('sell_${position.mint}');
+
       final realizedSol = await _determineRealizedSol(
         signature: signature,
         expectedSol: expectedSol,
         preBalanceSol: preBalanceSol,
       );
-      final exitFeeSol = realizedSol < expectedSol
-          ? (expectedSol - realizedSol)
-          : null;
+
+      // ⚡ OBTENER FEES EXACTOS POST-VENTA (asíncrono, no bloquea)
+      // Intentar obtener fees exactos desde Helius Enhanced API
+      double? exactExitFee;
+      double? exactBaseFee;
+      double? exactPriorityFee;
+
+      try {
+        final heliusService = ref.read(heliusEnhancedApiServiceProvider);
+        if (heliusService != null) {
+          final txDetails = await heliusService
+              .getTransactionDetails(signature: signature)
+              .timeout(const Duration(seconds: 5), onTimeout: () => null);
+
+          if (txDetails != null) {
+            exactExitFee = txDetails.totalFee;
+            exactBaseFee = txDetails.baseFee;
+            exactPriorityFee = txDetails.priorityFee;
+          }
+        }
+      } catch (_) {
+        // Si falla obtener fees exactos, usar estimación
+        // No es crítico, solo mejora la precisión
+      }
+
+      // Si no se pudieron obtener fees exactos, usar estimación
+      final exitFeeSol =
+          exactExitFee ??
+          (realizedSol < expectedSol ? (expectedSol - realizedSol) : null);
+
       notifier.completePositionSale(
         position: position,
         sellSignature: signature,
         realizedSol: realizedSol,
         exitFeeSol: exitFeeSol,
+        baseFeeSol: exactBaseFee,
+        priorityFeeSol: exactPriorityFee,
       );
+
+      // ⚡ COOLDOWN: Agregar mint a _recentMints para evitar comprar de nuevo inmediatamente
+      // Solo si es una venta completa (no parcial)
+      final currentState = ref.read(autoInvestProvider);
+      final stillHasPosition = currentState.positions.any(
+        (p) => p.mint == position.mint,
+      );
+      if (!stillHasPosition) {
+        // Es una venta completa, agregar cooldown de 15 minutos
+        _recentMints[position.mint] = DateTime.now();
+      }
+
       // Registro de auditor�a confirmado con PnL cuando sea posible
       final pnl = realizedSol - position.entrySol;
       final pnlPct = position.entrySol == 0
           ? null
           : (pnl / position.entrySol) * 100.0;
+
+      // Obtener coin si está disponible
+      FeaturedCoin? coin;
+      try {
+        final featured = ref.read(featuredCoinProvider);
+        coin = featured.coins.firstWhere((c) => c.mint == position.mint);
+      } catch (_) {
+        coin = null;
+      }
+
       unawaited(
         ref
             .read(transactionAuditLoggerProvider)
@@ -1215,9 +2315,25 @@ class AutoInvestExecutor {
               realizedExitSol: realizedSol,
               pnlSol: pnl,
               pnlPercent: pnlPct,
+              state: ref.read(autoInvestProvider),
+              coin: coin,
             ),
       );
     } catch (error) {
+      // 🚀 Detectar si el error es por low priority
+      final errorStr = error.toString().toLowerCase();
+      final isLowPriorityError =
+          errorStr.contains('insufficient') &&
+          (errorStr.contains('priority') ||
+              errorStr.contains('fee') ||
+              errorStr.contains('prioritization'));
+
+      if (isLowPriorityError) {
+        // Registrar fallo por low priority
+        final dynamicFeeService = ref.read(dynamicPriorityFeeServiceProvider);
+        dynamicFeeService.recordLowPriorityFailure(position.mint);
+      }
+
       ref
           .read(autoInvestProvider.notifier)
           .updateExecutionStatus(
@@ -1232,7 +2348,13 @@ class AutoInvestExecutor {
           .read(autoInvestProvider.notifier)
           .setStatus('Venta fall� (${position.symbol}): $error');
     } finally {
-      _positionsSelling.remove(position.entrySignature);
+      // ⚡ CRÍTICO: Solo limpiar bloqueo si es venta completa
+      // Para ventas parciales, el bloqueo ya se limpió inmediatamente después de enviar
+      if (!isPartialSale) {
+        _positionsSelling.remove(position.entrySignature);
+        final notifier = ref.read(autoInvestProvider.notifier);
+        notifier.setPositionClosing(position.entrySignature, false);
+      }
       _resetWalletBalanceCache();
     }
   }
@@ -1319,6 +2441,80 @@ class AutoInvestExecutor {
     _cancelWalletRetryTimer();
   }
 
+  /// 🐋 Analizar actividad de whales/insiders en un token
+  Future<WhaleAnalysis> _analyzeWhaleActivity({
+    required String mint,
+    String? creatorAddress,
+  }) async {
+    try {
+      final whaleService = ref.read(whaleTrackerServiceProvider);
+      final analysis = await whaleService
+          .analyzeTokenActivity(
+            mint: mint,
+            creatorAddress: creatorAddress,
+            lookbackWindow: const Duration(minutes: 5),
+          )
+          .timeout(
+            const Duration(seconds: 3),
+            onTimeout: () => WhaleAnalysis(
+              mint: mint,
+              recentWhaleBuys: [],
+              recentWhaleSells: [],
+              creatorSells: [],
+              totalWhaleVolume: 0.0,
+              whaleBuyPressure: 0.0,
+              whaleSellPressure: 0.0,
+            ),
+          );
+      return analysis;
+    } catch (e) {
+      // Si falla, retornar análisis vacío (neutral)
+      return WhaleAnalysis(
+        mint: mint,
+        recentWhaleBuys: [],
+        recentWhaleSells: [],
+        creatorSells: [],
+        totalWhaleVolume: 0.0,
+        whaleBuyPressure: 0.0,
+        whaleSellPressure: 0.0,
+      );
+    }
+  }
+
+  /// 🛡️ Verificar seguridad del token de forma asíncrona antes de comprar
+  /// Retorna true si el token es seguro, false si no lo es
+  Future<bool> _verifyTokenSecurityAsync(FeaturedCoin candidate) async {
+    try {
+      final securityService = ref.read(tokenSecurityAnalyzerProvider);
+      TokenSecurityScore? securityScore;
+      try {
+        securityScore = await securityService
+            .analyzeToken(candidate.mint)
+            .timeout(const Duration(seconds: 3));
+      } catch (e) {
+        // Si timeout o error, asumir seguro y continuar
+        securityScore = null;
+      }
+
+      if (securityScore != null && !securityScore.isSafe) {
+        // Token no es seguro, cancelar compra
+        final notifier = ref.read(autoInvestProvider.notifier);
+        notifier.setStatus(
+          '⚠️ Token ${candidate.symbol} no es seguro (score: ${securityScore.overallScore.toStringAsFixed(1)}/100). '
+          'Riesgos: ${securityScore.risks.join(", ")}',
+        );
+        // Agregar a cooldown para evitar reintentos inmediatos
+        _recentMints[candidate.mint] = DateTime.now();
+        return false;
+      }
+
+      return true; // Token es seguro o análisis no disponible
+    } catch (e) {
+      // Si falla el análisis, asumir seguro (no bloquear por análisis de seguridad)
+      return true;
+    }
+  }
+
   bool _didRelevantStateChange(AutoInvestState previous, AutoInvestState next) {
     if (previous.isEnabled != next.isEnabled) return true;
     if (previous.walletAddress != next.walletAddress) return true;
@@ -1375,6 +2571,8 @@ class _ScanReport {
     required this.filteredByAge,
     required this.filteredByHeld,
     required this.filteredByCooldown,
+    this.filteredByMaxTokens = 0,
+    this.filteredBySecurity = 0,
     this.candidate,
   });
 
@@ -1385,6 +2583,8 @@ class _ScanReport {
   final int filteredByAge;
   final int filteredByHeld;
   final int filteredByCooldown;
+  final int filteredByMaxTokens;
+  final int filteredBySecurity;
   final FeaturedCoin? candidate;
 
   bool get hasCandidate => candidate != null;

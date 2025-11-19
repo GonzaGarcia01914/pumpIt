@@ -8,6 +8,7 @@ import '../../featured_coins/controller/featured_coin_notifier.dart';
 import '../../featured_coins/models/featured_coin.dart';
 import '../controller/auto_invest_notifier.dart';
 import '../models/execution_mode.dart';
+import '../models/sale_level.dart';
 import '../../../core/widgets/hover_glow.dart';
 import '../../../core/widgets/soft_surface.dart';
 import 'widgets/analysis_drawer_panel.dart';
@@ -44,6 +45,10 @@ class AutoInvestPage extends ConsumerWidget {
             _ManualMintsSection(state: state, notifier: notifier),
             const SizedBox(height: 16),
             _RiskSection(state: state, notifier: notifier),
+            const SizedBox(height: 16),
+            _LimitsSection(state: state, notifier: notifier),
+            const SizedBox(height: 16),
+            _EliteFeaturesSection(),
             const SizedBox(height: 16),
             _ExecutionModeSection(state: state, notifier: notifier),
             const SizedBox(height: 16),
@@ -310,47 +315,132 @@ class _FilterSection extends StatelessWidget {
             subtitle: 'Rangos de market cap, volumen y señales sociales',
           ),
           const SizedBox(height: 18),
+          _SectionLabel('Market Cap (USD)'),
+          const SizedBox(height: 8),
           _RRow(
             children: [
               _NumberField(
-                label: 'MC m\u00ednima USD',
+                label: 'M\u00ednimo',
                 value: state.minMarketCap,
                 onChanged: notifier.updateMinMarketCap,
               ),
               _NumberField(
-                label: 'MC m\u00e1xima USD',
+                label: 'M\u00e1ximo',
                 value: state.maxMarketCap,
                 onChanged: notifier.updateMaxMarketCap,
               ),
             ],
           ),
           const SizedBox(height: 16),
+          _NumberField(
+            label: 'Liquidez mínima USD',
+            value: state.minLiquidity,
+            onChanged: notifier.updateMinLiquidity,
+          ),
+          const SizedBox(height: 16),
+          // ⚡ Volumen unificado: min/max, unidad y tiempo
+          _SectionLabel('Volumen'),
+          const SizedBox(height: 8),
           _RRow(
             children: [
               _NumberField(
-                label: 'Volumen 24h mínimo',
+                label: 'Mínimo',
                 value: state.minVolume24h,
                 onChanged: notifier.updateMinVolume,
               ),
               _NumberField(
-                label: 'Volumen 24h máximo',
+                label: 'Máximo',
                 value: state.maxVolume24h,
                 onChanged: notifier.updateMaxVolume,
               ),
             ],
           ),
-          const SizedBox(height: 16),
-          _RRow(
+          const SizedBox(height: 8),
+          Row(
             children: [
-              _NumberField(
-                label: 'Mínimo replies',
-                value: state.minReplies,
-                onChanged: notifier.updateMinReplies,
+              Expanded(
+                child: DropdownButtonFormField<VolumeTimeUnit>(
+                  value: state.volumeTimeUnit,
+                  decoration: const InputDecoration(
+                    labelText: 'Unidad',
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 16,
+                    ),
+                  ),
+                  items: VolumeTimeUnit.values
+                      .map(
+                        (unit) => DropdownMenuItem(
+                          value: unit,
+                          child: Text(unit == VolumeTimeUnit.minutes ? 'min' : 'h'),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (unit) {
+                    if (unit != null) notifier.updateVolumeTimeUnit(unit);
+                  },
+                ),
               ),
-              _NumberField(
-                label: 'Antigüedad máx. (h)',
-                value: state.maxAgeHours,
-                onChanged: notifier.updateMaxAgeHours,
+              const SizedBox(width: 8),
+              Expanded(
+                child: _NumberField(
+                  label: 'Tiempo',
+                  value: state.volumeTimeValue,
+                  onChanged: notifier.updateVolumeTimeValue,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          _NumberField(
+            label: 'Mínimo replies',
+            value: state.minReplies,
+            onChanged: notifier.updateMinReplies,
+          ),
+          const SizedBox(height: 16),
+          // ⚡ Edad unificada: min/max con unidad
+          _SectionLabel('Edad del token'),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: _NumberField(
+                  label: 'Edad mín.',
+                  value: state.minAgeValue,
+                  onChanged: notifier.updateMinAgeValue,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _NumberField(
+                  label: 'Edad máxima',
+                  value: state.maxAgeValue,
+                  onChanged: notifier.updateMaxAgeValue,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: DropdownButtonFormField<TimeUnit>(
+                  value: state.ageTimeUnit,
+                  decoration: const InputDecoration(
+                    labelText: 'Unidad',
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 16,
+                    ),
+                  ),
+                  items: TimeUnit.values
+                      .map(
+                        (unit) => DropdownMenuItem(
+                          value: unit,
+                          child: Text(unit == TimeUnit.minutes ? 'min' : 'h'),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (unit) {
+                    if (unit != null) notifier.updateAgeTimeUnit(unit);
+                  },
+                ),
               ),
             ],
           ),
@@ -490,7 +580,7 @@ class _RiskSection extends StatelessWidget {
           const _SectionHeader(
             icon: Icons.shield_outlined,
             title: 'Riesgo y salida',
-            subtitle: 'Sliders de stop loss y take profit',
+            subtitle: 'Ventas escalonadas y trailing stop',
           ),
           const SizedBox(height: 16),
           _SliderTile(
@@ -502,14 +592,44 @@ class _RiskSection extends StatelessWidget {
             onChanged: notifier.updateStopLoss,
           ),
           const SizedBox(height: 16),
-          _SliderTile(
-            label: 'Take profit',
-            value: state.takeProfitPercent.clamp(10, 200),
-            min: 10,
-            max: 200,
-            suffix: '%',
-            onChanged: notifier.updateTakeProfit,
+          _SaleLevelsEditor(
+            title: 'Ventas escalonadas - Take Profit',
+            levels: state.takeProfitLevels,
+            onAdd: (level) => notifier.addTakeProfitLevel(level),
+            onRemove: (index) => notifier.removeTakeProfitLevel(index),
+            onUpdate: (index, level) => notifier.updateTakeProfitLevel(index, level),
+            isTakeProfit: true,
           ),
+          const SizedBox(height: 16),
+          _SaleLevelsEditor(
+            title: 'Ventas escalonadas - Stop Loss',
+            levels: state.stopLossLevels,
+            onAdd: (level) => notifier.addStopLossLevel(level),
+            onRemove: (index) => notifier.removeStopLossLevel(index),
+            onUpdate: (index, level) => notifier.updateStopLossLevel(index, level),
+            isTakeProfit: false,
+          ),
+          const SizedBox(height: 16),
+          SwitchListTile.adaptive(
+            value: state.trailingStopEnabled,
+            onChanged: notifier.updateTrailingStopEnabled,
+            title: const Text('Trailing Stop Loss'),
+            subtitle: const Text(
+              'Ajusta el stop loss automáticamente cuando el precio sube',
+            ),
+          ),
+          if (state.trailingStopEnabled) ...[
+            const SizedBox(height: 8),
+            _SliderTile(
+              label: 'Trailing Stop %',
+              value: state.trailingStopPercent.clamp(1, 50),
+              min: 1,
+              max: 50,
+              suffix: '%',
+              subtitle: 'Porcentaje de retroceso desde el máximo para activar stop loss',
+              onChanged: notifier.updateTrailingStopPercent,
+            ),
+          ],
           const SizedBox(height: 12),
           SwitchListTile.adaptive(
             value: state.withdrawOnGain,
@@ -517,6 +637,280 @@ class _RiskSection extends StatelessWidget {
             title: const Text('Retirar tras ganancia'),
             subtitle: const Text(
               'Si está activo, el bot moverá las utilidades al presupuesto general antes de reinvertir.',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EliteFeaturesSection extends ConsumerWidget {
+  const _EliteFeaturesSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    return SoftSurface(
+      color: theme.colorScheme.surface,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _SectionHeader(
+            icon: Icons.stars_rounded,
+            title: 'Características Elite',
+            subtitle: 'Funciones avanzadas activas automáticamente',
+          ),
+          const SizedBox(height: 16),
+          _EliteFeatureCard(
+            icon: Icons.speed,
+            title: 'Priority Fees Dinámicos',
+            description:
+                'Ajusta automáticamente los fees según congestión de red y competencia',
+            status: 'Activo',
+            isActive: true,
+          ),
+          const SizedBox(height: 12),
+          _EliteFeatureCard(
+            icon: Icons.shield,
+            title: 'Detección de Rug Pulls',
+            description:
+                'Analiza tokens antes de comprar para detectar riesgos de seguridad',
+            status: 'Activo',
+            isActive: true,
+          ),
+          const SizedBox(height: 12),
+          _EliteFeatureCard(
+            icon: Icons.water_drop,
+            title: 'Detección de Whales',
+            description:
+                'Monitorea actividad de wallets grandes y detecta ventas del creator',
+            status: 'Activo',
+            isActive: true,
+          ),
+          const SizedBox(height: 12),
+          _EliteFeatureCard(
+            icon: Icons.trending_up,
+            title: 'Slippage Dinámico',
+            description:
+                'Ajusta slippage automáticamente según volatilidad y liquidez',
+            status: 'Activo',
+            isActive: true,
+          ),
+          const SizedBox(height: 12),
+          _EliteFeatureCard(
+            icon: Icons.access_time,
+            title: 'Timing de Entrada Inteligente',
+            description:
+                'Espera confirmación de momentum y detecta pumps reales vs fake pumps',
+            status: 'Activo',
+            isActive: true,
+          ),
+          const SizedBox(height: 12),
+          _EliteFeatureCard(
+            icon: Icons.wifi_tethering,
+            title: 'Monitoreo de Pools en Tiempo Real',
+            description:
+                'Reacciona en <100ms a cambios críticos usando WebSockets',
+            status: 'Activo',
+            isActive: true,
+          ),
+          const SizedBox(height: 12),
+          _EliteFeatureCard(
+            icon: Icons.error_outline,
+            title: 'Manejo de Errores Inteligente',
+            description:
+                'Clasifica errores y aplica circuit breaker para evitar loops infinitos',
+            status: 'Activo',
+            isActive: true,
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primaryContainer.withValues(alpha: 0.3),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: theme.colorScheme.primary.withValues(alpha: 0.2),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.info_outline,
+                  size: 20,
+                  color: theme.colorScheme.primary,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Estas características funcionan automáticamente en segundo plano. '
+                    'Los mensajes de status mostrarán cuando se activen.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EliteFeatureCard extends StatelessWidget {
+  const _EliteFeatureCard({
+    required this.icon,
+    required this.title,
+    required this.description,
+    required this.status,
+    required this.isActive,
+  });
+
+  final IconData icon;
+  final String title;
+  final String description;
+  final String status;
+  final bool isActive;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: isActive
+            ? theme.colorScheme.primaryContainer.withValues(alpha: 0.15)
+            : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isActive
+              ? theme.colorScheme.primary.withValues(alpha: 0.3)
+              : theme.colorScheme.outline.withValues(alpha: 0.2),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: isActive
+                  ? theme.colorScheme.primary.withValues(alpha: 0.2)
+                  : theme.colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(
+              icon,
+              size: 20,
+              color: isActive
+                  ? theme.colorScheme.primary
+                  : theme.colorScheme.onSurface.withValues(alpha: 0.5),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        title,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                          color: isActive
+                              ? theme.colorScheme.onSurface
+                              : theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                        ),
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isActive
+                            ? Colors.green.withValues(alpha: 0.2)
+                            : Colors.grey.withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        status,
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: isActive ? Colors.green : Colors.grey,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  description,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LimitsSection extends StatelessWidget {
+  const _LimitsSection({required this.state, required this.notifier});
+  final AutoInvestState state;
+  final AutoInvestNotifier notifier;
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SoftSurface(
+      color: theme.colorScheme.surface,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _SectionHeader(
+            icon: Icons.speed,
+            title: 'Límites y controles',
+            subtitle: 'Límites de tokens simultáneos y límites diarios',
+          ),
+          const SizedBox(height: 18),
+          _NumberField(
+            label: 'Máx. tokens simultáneos',
+            value: state.maxTokensSimultaneous.toDouble(),
+            onChanged: (value) => notifier.updateMaxTokensSimultaneous(value.toInt()),
+            suffix: 'tokens',
+          ),
+          const SizedBox(height: 16),
+          _RRow(
+            children: [
+              _NumberField(
+                label: 'Máx. pérdida/día',
+                value: state.maxLossPerDay,
+                onChanged: notifier.updateMaxLossPerDay,
+                suffix: 'SOL',
+              ),
+              _NumberField(
+                label: 'Máx. ganancia/día',
+                value: state.maxEarningPerDay,
+                onChanged: notifier.updateMaxEarningPerDay,
+                suffix: 'SOL',
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Nota: 0 = sin límite. Los límites se calculan desde posiciones cerradas hoy.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
             ),
           ),
         ],
@@ -730,6 +1124,7 @@ class _SliderTile extends StatelessWidget {
     required this.max,
     required this.onChanged,
     this.suffix,
+    this.subtitle,
   });
   final String label;
   final double value;
@@ -737,6 +1132,7 @@ class _SliderTile extends StatelessWidget {
   final double max;
   final ValueChanged<double> onChanged;
   final String? suffix;
+  final String? subtitle;
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -758,6 +1154,16 @@ class _SliderTile extends StatelessWidget {
             ),
           ],
         ),
+        if (subtitle != null) ...[
+          const SizedBox(height: 4),
+          Text(
+            subtitle!,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
         Slider(
           min: min,
           max: max,
@@ -960,6 +1366,228 @@ class _BudgetProgressBar extends StatelessWidget {
             backgroundColor: Colors.white.withValues(alpha: 0.08),
             valueColor: AlwaysStoppedAnimation(theme.colorScheme.primary),
           ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel(this.text);
+  final String text;
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Text(
+      text,
+      style: theme.textTheme.titleSmall?.copyWith(
+        fontWeight: FontWeight.bold,
+        color: theme.colorScheme.onSurface,
+      ),
+    );
+  }
+}
+
+class _SaleLevelsEditor extends StatefulWidget {
+  const _SaleLevelsEditor({
+    required this.title,
+    required this.levels,
+    required this.onAdd,
+    required this.onRemove,
+    required this.onUpdate,
+    required this.isTakeProfit,
+  });
+  final String title;
+  final List<SaleLevel> levels;
+  final void Function(SaleLevel) onAdd;
+  final void Function(int) onRemove;
+  final void Function(int, SaleLevel) onUpdate;
+  final bool isTakeProfit;
+
+  @override
+  State<_SaleLevelsEditor> createState() => _SaleLevelsEditorState();
+}
+
+class _SaleLevelsEditorState extends State<_SaleLevelsEditor> {
+  void _showAddDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => _SaleLevelDialog(
+        isTakeProfit: widget.isTakeProfit,
+        onSave: widget.onAdd,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              widget.title,
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            TextButton.icon(
+              onPressed: _showAddDialog,
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('Agregar nivel'),
+            ),
+          ],
+        ),
+        if (widget.levels.isEmpty)
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              'No hay niveles configurados. Agrega uno para activar ventas escalonadas.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+              ),
+            ),
+          )
+        else
+          ...widget.levels.asMap().entries.map((entry) {
+            final index = entry.key;
+            final level = entry.value;
+            return Card(
+              margin: const EdgeInsets.only(bottom: 8),
+              child: ListTile(
+                title: Text(
+                  '${widget.isTakeProfit ? '+' : ''}${level.pnlPercent.toStringAsFixed(2)}% → Vender ${level.sellPercent.toStringAsFixed(0)}% del restante',
+                ),
+                trailing: IconButton(
+                  icon: const Icon(Icons.delete_outline),
+                  onPressed: () => widget.onRemove(index),
+                ),
+                onTap: () {
+                  showDialog(
+                    context: context,
+                    builder: (context) => _SaleLevelDialog(
+                      isTakeProfit: widget.isTakeProfit,
+                      initialLevel: level,
+                      onSave: (updated) => widget.onUpdate(index, updated),
+                    ),
+                  );
+                },
+              ),
+            );
+          }),
+      ],
+    );
+  }
+}
+
+class _SaleLevelDialog extends StatefulWidget {
+  const _SaleLevelDialog({
+    required this.isTakeProfit,
+    required this.onSave,
+    this.initialLevel,
+  });
+  final bool isTakeProfit;
+  final SaleLevel? initialLevel;
+  final void Function(SaleLevel) onSave;
+
+  @override
+  State<_SaleLevelDialog> createState() => _SaleLevelDialogState();
+}
+
+class _SaleLevelDialogState extends State<_SaleLevelDialog> {
+  late final TextEditingController _pnlController;
+  late final TextEditingController _sellController;
+
+  @override
+  void initState() {
+    super.initState();
+    _pnlController = TextEditingController(
+      text: widget.initialLevel?.pnlPercent.toStringAsFixed(2) ?? '',
+    );
+    _sellController = TextEditingController(
+      text: widget.initialLevel?.sellPercent.toStringAsFixed(0) ?? '',
+    );
+  }
+
+  @override
+  void dispose() {
+    _pnlController.dispose();
+    _sellController.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final pnl = double.tryParse(_pnlController.text);
+    final sell = double.tryParse(_sellController.text);
+    if (pnl == null || sell == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Valores inválidos')),
+      );
+      return;
+    }
+    if (widget.isTakeProfit && pnl <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('El PnL para Take Profit debe ser positivo')),
+      );
+      return;
+    }
+    if (!widget.isTakeProfit && pnl >= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('El PnL para Stop Loss debe ser negativo')),
+      );
+      return;
+    }
+    if (sell < 0 || sell > 100) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('El porcentaje a vender debe estar entre 0 y 100')),
+      );
+      return;
+    }
+    widget.onSave(SaleLevel(pnlPercent: pnl, sellPercent: sell));
+    Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.isTakeProfit ? 'Nivel Take Profit' : 'Nivel Stop Loss'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _pnlController,
+            decoration: InputDecoration(
+              labelText: 'PnL % para activar',
+              hintText: widget.isTakeProfit ? 'Ej: 15' : 'Ej: -10',
+              helperText: widget.isTakeProfit
+                  ? 'Porcentaje de ganancia que activa este nivel'
+                  : 'Porcentaje de pérdida que activa este nivel',
+            ),
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _sellController,
+            decoration: const InputDecoration(
+              labelText: '% a vender',
+              hintText: 'Ej: 50',
+              helperText: 'Porcentaje del restante a vender en este nivel',
+            ),
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: _save,
+          child: const Text('Guardar'),
         ),
       ],
     );

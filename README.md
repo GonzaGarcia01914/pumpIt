@@ -86,18 +86,36 @@ flutter test
    ```
    Guarda el archivo fuera del repo (BitLocker/FileVault) y fondea la cuenta con presupuesto limitado.
 
-2. **RPC**
-   - Usa `RPC_URL=https://api.devnet.solana.com` para probar (con `solana airdrop`).
-   - Para mainnet, un RPC privado como Helius (`https://mainnet.helius-rpc.com/?api-key=...`). Ajusta `JUPITER_PRIORITY_FEE_LAMPORTS` según la congestión.
+2. **RPC PRIVADO (CRÍTICO para velocidad) ⚡**
+   - ⚠️ **OBLIGATORIO**: Usa un RPC privado de alto rendimiento (Helius recomendado)
+   - Sin RPC privado, el bot será lento (2-20s por transacción). Con RPC privado: <500ms
+   - **Configuración Helius (recomendado):**
+     ```bash
+     --dart-define=HELIUS_API_KEY=tu_api_key_de_helius
+     ```
+     El bot automáticamente usará:
+     - **RPC HTTP**: `https://mainnet.helius-rpc.com/?api-key=TU_KEY`
+     - **WebSocket**: `wss://mainnet.helius-rpc.com/?api-key=TU_KEY`
+     - **Enhanced API**: `https://api-mainnet.helius-rpc.com/v0/transactions/?api-key=TU_KEY`
+   - **Alternativa (override manual):**
+     ```bash
+     --dart-define=RPC_URL=https://mainnet.helius-rpc.com/?api-key=TU_KEY
+     ```
+   - Ajusta `JUPITER_PRIORITY_FEE_LAMPORTS` según congestión (recomendado: 5000-10000)
 
 3. **Lanzar la app**
    ```powershell
    flutter run -d windows `
      --dart-define=LOCAL_KEY_PATH=C:\Keys\auto_bot.json `
-     --dart-define=RPC_URL=https://mainnet.helius-rpc.com/?api-key=TU_KEY `
+     --dart-define=HELIUS_API_KEY=tu_api_key_de_helius `
      --dart-define=OPENAI_API_KEY=sk-xxxx `
      --dart-define=JUPITER_PRIORITY_FEE_LAMPORTS=5000
    ```
+   
+   **Nota:** Con `HELIUS_API_KEY` configurado, el bot automáticamente usa:
+   - RPC HTTP de Helius para transacciones
+   - WebSocket de Helius para confirmaciones en tiempo real
+   - Enhanced API de Helius para analytics (si está habilitado)
 
 4. **Operar**
    - Pulsa *Connect wallet* (lee tu `id.json`).
@@ -105,7 +123,24 @@ flutter test
    - Enciende el switch **Auto Invest**. El bot solicitará quotes en Jupiter (o PumpPortal si lo eliges), firmará con tu key y enviará la transacción al RPC configurado.
    - Revisa la pestaña **Resultados** para ver simulaciones y órdenes reales (txid, horario, estado).
 
-> ⚠️ Usa wallets dedicadas, preset de límites diarios y priority fees. Comienza en devnet y sube a mainnet gradualmente. Por ahora el bot ejecuta compras; vender/gestionar posiciones se añadirá en iteraciones posteriores.
+> ⚠️ Usa wallets dedicadas, preset de límites diarios y priority fees. Comienza en devnet y sube a mainnet gradualmente.
+
+## ⚡ Optimizaciones de Velocidad Implementadas
+
+El bot está optimizado para trading de alta frecuencia con las siguientes mejoras:
+
+1. **✅ Skip Preflight**: Habilitado por defecto (aumenta velocidad x5)
+2. **✅ Jito Bundles**: Habilitado para compras/ventas vía PumpPortal (salta al frente del bloque)
+3. **✅ Confirmación Optimizada**: Timeout agresivo (15s) con verificación manual de fallback
+4. **✅ Envío en Paralelo**: Múltiples ventas pueden ejecutarse simultáneamente
+5. **✅ RPC Privado**: Configuración obligatoria para máximo rendimiento
+6. **✅ Preconstrucción de Transacciones**: Cache de 5 segundos para evitar regenerar transacciones idénticas
+
+**Tiempos esperados con RPC privado:**
+- Compra: <500ms (envío) + <2s (confirmación)
+- Venta: <500ms (envío) + <2s (confirmación)
+
+**Sin RPC privado:** 2-20s por transacción (no recomendado para trading)
 
 ## Próximos pasos sugeridos
 

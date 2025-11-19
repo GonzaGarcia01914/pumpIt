@@ -1,4 +1,8 @@
 class WalletExecutionService {
+  WalletExecutionService({dynamic websocketService}) {
+    // Stub - ignora websocketService
+  }
+
   bool get isAvailable => false;
   String? get currentPublicKey => null;
 
@@ -41,6 +45,10 @@ class WalletExecutionService {
   Future<double?> getWalletBalance(String address) async => null;
 
   Future<double?> getTransactionFee(String signature) async => null;
+
+  Future<String> getLatestBlockhash() async {
+    throw UnsupportedError('getLatestBlockhash no disponible en esta plataforma.');
+  }
 
   void dispose() {}
 }

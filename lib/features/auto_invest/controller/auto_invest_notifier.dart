@@ -8,11 +8,16 @@ import '../../featured_coins/controller/featured_coin_notifier.dart';
 import '../models/execution_record.dart';
 import '../models/execution_mode.dart';
 import '../models/position.dart';
+import '../models/sale_level.dart';
 import '../models/simulation_models.dart';
 import '../services/auto_invest_storage.dart';
 import '../services/wallet_execution_service.dart';
 import '../services/simulation_analysis_service.dart';
 import '../../../core/log/global_log.dart';
+
+enum TimeUnit { minutes, hours }
+
+enum VolumeTimeUnit { minutes, hours }
 
 class AutoInvestState {
   const AutoInvestState({
@@ -52,6 +57,21 @@ class AutoInvestState {
     required this.preferNewest,
     required this.includeManualMints,
     required this.manualMints,
+    required this.minLiquidity,
+    required this.volumeTimeUnit,
+    required this.volumeTimeValue,
+    required this.ageTimeUnit,
+    required this.minAgeValue,
+    required this.maxAgeValue,
+    required this.stopLossPartialPercent,
+    required this.takeProfitPartialPercent,
+    required this.takeProfitLevels,
+    required this.stopLossLevels,
+    required this.trailingStopEnabled,
+    required this.trailingStopPercent,
+    required this.maxTokensSimultaneous,
+    required this.maxLossPerDay,
+    required this.maxEarningPerDay,
     this.walletBalanceUpdatedAt,
     this.solPriceUpdatedAt,
     this.statusMessage,
@@ -97,6 +117,21 @@ class AutoInvestState {
     preferNewest: false,
     includeManualMints: false,
     manualMints: const [],
+    minLiquidity: 0,
+    volumeTimeUnit: VolumeTimeUnit.hours,
+    volumeTimeValue: 24,
+    ageTimeUnit: TimeUnit.hours,
+    minAgeValue: 0,
+    maxAgeValue: 72,
+    stopLossPartialPercent: 100,
+    takeProfitPartialPercent: 100,
+    takeProfitLevels: const [],
+    stopLossLevels: const [],
+    trailingStopEnabled: false,
+    trailingStopPercent: 5,
+    maxTokensSimultaneous: 0,
+    maxLossPerDay: 0,
+    maxEarningPerDay: 0,
     walletBalanceUpdatedAt: null,
     solPriceUpdatedAt: null,
     lastScanMessage: null,
@@ -140,6 +175,21 @@ class AutoInvestState {
   final bool preferNewest;
   final bool includeManualMints;
   final List<String> manualMints;
+  final double minLiquidity;
+  final VolumeTimeUnit volumeTimeUnit;
+  final double volumeTimeValue;
+  final TimeUnit ageTimeUnit;
+  final double minAgeValue;
+  final double maxAgeValue;
+  final double stopLossPartialPercent;
+  final double takeProfitPartialPercent;
+  final List<SaleLevel> takeProfitLevels;
+  final List<SaleLevel> stopLossLevels;
+  final bool trailingStopEnabled;
+  final double trailingStopPercent;
+  final int maxTokensSimultaneous;
+  final double maxLossPerDay;
+  final double maxEarningPerDay;
   final DateTime? walletBalanceUpdatedAt;
   final DateTime? solPriceUpdatedAt;
   final String? statusMessage;
@@ -191,6 +241,21 @@ class AutoInvestState {
     bool? preferNewest,
     bool? includeManualMints,
     List<String>? manualMints,
+    double? minLiquidity,
+    VolumeTimeUnit? volumeTimeUnit,
+    double? volumeTimeValue,
+    TimeUnit? ageTimeUnit,
+    double? minAgeValue,
+    double? maxAgeValue,
+    double? stopLossPartialPercent,
+    double? takeProfitPartialPercent,
+    List<SaleLevel>? takeProfitLevels,
+    List<SaleLevel>? stopLossLevels,
+    bool? trailingStopEnabled,
+    double? trailingStopPercent,
+    int? maxTokensSimultaneous,
+    double? maxLossPerDay,
+    double? maxEarningPerDay,
     DateTime? walletBalanceUpdatedAt,
     DateTime? solPriceUpdatedAt,
     String? statusMessage,
@@ -238,19 +303,39 @@ class AutoInvestState {
       preferNewest: preferNewest ?? this.preferNewest,
       includeManualMints: includeManualMints ?? this.includeManualMints,
       manualMints: manualMints ?? this.manualMints,
+      minLiquidity: minLiquidity ?? this.minLiquidity,
+      volumeTimeUnit: volumeTimeUnit ?? this.volumeTimeUnit,
+      volumeTimeValue: volumeTimeValue ?? this.volumeTimeValue,
+      ageTimeUnit: ageTimeUnit ?? this.ageTimeUnit,
+      minAgeValue: minAgeValue ?? this.minAgeValue,
+      maxAgeValue: maxAgeValue ?? this.maxAgeValue,
+      stopLossPartialPercent:
+          stopLossPartialPercent ?? this.stopLossPartialPercent,
+      takeProfitPartialPercent:
+          takeProfitPartialPercent ?? this.takeProfitPartialPercent,
+      takeProfitLevels: takeProfitLevels ?? this.takeProfitLevels,
+      stopLossLevels: stopLossLevels ?? this.stopLossLevels,
+      trailingStopEnabled: trailingStopEnabled ?? this.trailingStopEnabled,
+      trailingStopPercent: trailingStopPercent ?? this.trailingStopPercent,
+      maxTokensSimultaneous:
+          maxTokensSimultaneous ?? this.maxTokensSimultaneous,
+      maxLossPerDay: maxLossPerDay ?? this.maxLossPerDay,
+      maxEarningPerDay: maxEarningPerDay ?? this.maxEarningPerDay,
       walletBalanceUpdatedAt:
           walletBalanceUpdatedAt ?? this.walletBalanceUpdatedAt,
       solPriceUpdatedAt: solPriceUpdatedAt ?? this.solPriceUpdatedAt,
       statusMessage: clearMessage ? null : statusMessage ?? this.statusMessage,
-      lastScanMessage:
-          clearScanSummary ? null : lastScanMessage ?? this.lastScanMessage,
+      lastScanMessage: clearScanSummary
+          ? null
+          : lastScanMessage ?? this.lastScanMessage,
       lastScanReasons: clearScanSummary
           ? const []
           : (lastScanReasons != null
-              ? List<String>.unmodifiable(lastScanReasons)
-              : this.lastScanReasons),
-      lastScanFailed:
-          clearScanSummary ? false : lastScanFailed ?? this.lastScanFailed,
+                ? List<String>.unmodifiable(lastScanReasons)
+                : this.lastScanReasons),
+      lastScanFailed: clearScanSummary
+          ? false
+          : lastScanFailed ?? this.lastScanFailed,
     );
   }
 
@@ -283,6 +368,21 @@ class AutoInvestState {
     'preferNewest': preferNewest,
     'includeManualMints': includeManualMints,
     'manualMints': manualMints,
+    'minLiquidity': minLiquidity,
+    'volumeTimeUnit': volumeTimeUnit.name,
+    'volumeTimeValue': volumeTimeValue,
+    'ageTimeUnit': ageTimeUnit.name,
+    'minAgeValue': minAgeValue,
+    'maxAgeValue': maxAgeValue,
+    'stopLossPartialPercent': stopLossPartialPercent,
+    'takeProfitPartialPercent': takeProfitPartialPercent,
+    'takeProfitLevels': takeProfitLevels.map((l) => l.toJson()).toList(),
+    'stopLossLevels': stopLossLevels.map((l) => l.toJson()).toList(),
+    'trailingStopEnabled': trailingStopEnabled,
+    'trailingStopPercent': trailingStopPercent,
+    'maxTokensSimultaneous': maxTokensSimultaneous,
+    'maxLossPerDay': maxLossPerDay,
+    'maxEarningPerDay': maxEarningPerDay,
     'walletBalanceUpdatedAt': walletBalanceUpdatedAt?.toIso8601String(),
     'solPriceUpdatedAt': solPriceUpdatedAt?.toIso8601String(),
     'positions': positions.map((p) => p.toJson()).toList(growable: false),
@@ -412,6 +512,50 @@ class AutoInvestState {
               ?.map((e) => e.toString())
               .toList() ??
           initial.manualMints,
+      minLiquidity: readDouble('minLiquidity', initial.minLiquidity),
+      volumeTimeUnit: _parseVolumeTimeUnit(
+        json['volumeTimeUnit']?.toString(),
+        initial.volumeTimeUnit,
+      ),
+      volumeTimeValue: readDouble('volumeTimeValue', initial.volumeTimeValue),
+      ageTimeUnit: _parseTimeUnit(
+        json['ageTimeUnit']?.toString(),
+        initial.ageTimeUnit,
+      ),
+      minAgeValue: readDouble('minAgeValue', initial.minAgeValue),
+      maxAgeValue: readDouble('maxAgeValue', initial.maxAgeValue),
+      stopLossPartialPercent: readDouble(
+        'stopLossPartialPercent',
+        initial.stopLossPartialPercent,
+      ),
+      takeProfitPartialPercent: readDouble(
+        'takeProfitPartialPercent',
+        initial.takeProfitPartialPercent,
+      ),
+      takeProfitLevels:
+          (json['takeProfitLevels'] as List<dynamic>?)
+              ?.map((e) => SaleLevel.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          initial.takeProfitLevels,
+      stopLossLevels:
+          (json['stopLossLevels'] as List<dynamic>?)
+              ?.map((e) => SaleLevel.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          initial.stopLossLevels,
+      trailingStopEnabled:
+          json['trailingStopEnabled'] as bool? ?? initial.trailingStopEnabled,
+      trailingStopPercent: readDouble(
+        'trailingStopPercent',
+        initial.trailingStopPercent,
+      ),
+      maxTokensSimultaneous:
+          (json['maxTokensSimultaneous'] as num?)?.toInt() ??
+          initial.maxTokensSimultaneous,
+      maxLossPerDay: readDouble('maxLossPerDay', initial.maxLossPerDay),
+      maxEarningPerDay: readDouble(
+        'maxEarningPerDay',
+        initial.maxEarningPerDay,
+      ),
       walletBalanceUpdatedAt:
           parseDate(json['walletBalanceUpdatedAt']) ??
           initial.walletBalanceUpdatedAt,
@@ -420,6 +564,25 @@ class AutoInvestState {
       lastScanMessage: null,
       lastScanReasons: const [],
       lastScanFailed: false,
+    );
+  }
+
+  static TimeUnit _parseTimeUnit(String? raw, TimeUnit fallback) {
+    if (raw == null) return fallback;
+    return TimeUnit.values.firstWhere(
+      (unit) => unit.name == raw,
+      orElse: () => fallback,
+    );
+  }
+
+  static VolumeTimeUnit _parseVolumeTimeUnit(
+    String? raw,
+    VolumeTimeUnit fallback,
+  ) {
+    if (raw == null) return fallback;
+    return VolumeTimeUnit.values.firstWhere(
+      (unit) => unit.name == raw,
+      orElse: () => fallback,
     );
   }
 }
@@ -609,6 +772,112 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     _setState(state.copyWith(maxAgeHours: normalized));
   }
 
+  void updateMinLiquidity(double value) {
+    _setState(state.copyWith(minLiquidity: value.clamp(0, double.infinity)));
+  }
+
+  void updateVolumeTimeUnit(VolumeTimeUnit unit) {
+    _setState(state.copyWith(volumeTimeUnit: unit));
+  }
+
+  void updateVolumeTimeValue(double value) {
+    _setState(state.copyWith(volumeTimeValue: value.clamp(1, 720)));
+  }
+
+  void updateAgeTimeUnit(TimeUnit unit) {
+    _setState(state.copyWith(ageTimeUnit: unit));
+  }
+
+  void updateMinAgeValue(double value) {
+    _setState(state.copyWith(minAgeValue: value.clamp(0, 720)));
+  }
+
+  void updateMaxAgeValue(double value) {
+    _setState(state.copyWith(maxAgeValue: value.clamp(0, 720)));
+  }
+
+  void updateStopLossPartialPercent(double value) {
+    _setState(state.copyWith(stopLossPartialPercent: value.clamp(0, 100)));
+  }
+
+  void updateTakeProfitPartialPercent(double value) {
+    _setState(state.copyWith(takeProfitPartialPercent: value.clamp(0, 100)));
+  }
+
+  // ⚡ Ventas escalonadas - Take Profit
+  void setTakeProfitLevels(List<SaleLevel> levels) {
+    _setState(state.copyWith(takeProfitLevels: levels));
+  }
+
+  void addTakeProfitLevel(SaleLevel level) {
+    final updated = List<SaleLevel>.from(state.takeProfitLevels)..add(level);
+    updated.sort((a, b) => a.pnlPercent.compareTo(b.pnlPercent));
+    _setState(state.copyWith(takeProfitLevels: updated));
+  }
+
+  void removeTakeProfitLevel(int index) {
+    final updated = List<SaleLevel>.from(state.takeProfitLevels)
+      ..removeAt(index);
+    _setState(state.copyWith(takeProfitLevels: updated));
+  }
+
+  void updateTakeProfitLevel(int index, SaleLevel level) {
+    final updated = List<SaleLevel>.from(state.takeProfitLevels);
+    updated[index] = level;
+    updated.sort((a, b) => a.pnlPercent.compareTo(b.pnlPercent));
+    _setState(state.copyWith(takeProfitLevels: updated));
+  }
+
+  // ⚡ Ventas escalonadas - Stop Loss
+  void setStopLossLevels(List<SaleLevel> levels) {
+    _setState(state.copyWith(stopLossLevels: levels));
+  }
+
+  void addStopLossLevel(SaleLevel level) {
+    final updated = List<SaleLevel>.from(state.stopLossLevels)..add(level);
+    updated.sort(
+      (a, b) => b.pnlPercent.compareTo(a.pnlPercent),
+    ); // Orden inverso para SL
+    _setState(state.copyWith(stopLossLevels: updated));
+  }
+
+  void removeStopLossLevel(int index) {
+    final updated = List<SaleLevel>.from(state.stopLossLevels)..removeAt(index);
+    _setState(state.copyWith(stopLossLevels: updated));
+  }
+
+  void updateStopLossLevel(int index, SaleLevel level) {
+    final updated = List<SaleLevel>.from(state.stopLossLevels);
+    updated[index] = level;
+    updated.sort(
+      (a, b) => b.pnlPercent.compareTo(a.pnlPercent),
+    ); // Orden inverso para SL
+    _setState(state.copyWith(stopLossLevels: updated));
+  }
+
+  // ⚡ Trailing Stop
+  void updateTrailingStopEnabled(bool value) {
+    _setState(state.copyWith(trailingStopEnabled: value));
+  }
+
+  void updateTrailingStopPercent(double value) {
+    _setState(state.copyWith(trailingStopPercent: value.clamp(1, 50)));
+  }
+
+  void updateMaxTokensSimultaneous(int value) {
+    _setState(state.copyWith(maxTokensSimultaneous: value.clamp(0, 100)));
+  }
+
+  void updateMaxLossPerDay(double value) {
+    _setState(state.copyWith(maxLossPerDay: value.clamp(0, double.infinity)));
+  }
+
+  void updateMaxEarningPerDay(double value) {
+    _setState(
+      state.copyWith(maxEarningPerDay: value.clamp(0, double.infinity)),
+    );
+  }
+
   void updatePreferNewest(bool value) {
     _setState(state.copyWith(preferNewest: value));
   }
@@ -770,8 +1039,9 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     } catch (_) {
       // Ignorar si el log global no está disponible en este contexto.
     }
-    final List<String> sanitizedReasons =
-        failed ? List<String>.unmodifiable(reasons) : const <String>[];
+    final List<String> sanitizedReasons = failed
+        ? List<String>.unmodifiable(reasons)
+        : const <String>[];
     _setState(
       state.copyWith(
         lastScanMessage: message,
@@ -929,7 +1199,9 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
   Future<void> analyzeClosedPositions() async {
     if (state.closedPositions.isEmpty) {
       _setState(
-        state.copyWith(statusMessage: 'No hay posiciones cerradas para analizar.'),
+        state.copyWith(
+          statusMessage: 'No hay posiciones cerradas para analizar.',
+        ),
         persist: false,
       );
       return;
@@ -1112,6 +1384,18 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     _setState(state.copyWith(positions: updated));
   }
 
+  /// ⚡ Actualizar entryFeeSol de una posición (post-confirmación, fees exactos de Helius)
+  void updatePositionEntryFee(String txSignature, double entryFeeSol) {
+    final updated = state.positions
+        .map(
+          (position) => position.entrySignature == txSignature
+              ? position.copyWith(entryFeeSol: entryFeeSol)
+              : position,
+        )
+        .toList();
+    _setState(state.copyWith(positions: updated));
+  }
+
   void setPositionClosing(String txSignature, bool isClosing) {
     final updated = state.positions
         .map(
@@ -1123,60 +1407,147 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     _setState(state.copyWith(positions: updated));
   }
 
-  void completePositionSale({
+  /// ⚡ Revertir venta fallida: restaurar posición y fondos
+  void revertFailedSale({
     required OpenPosition position,
     required String sellSignature,
-    required double realizedSol,
-    double? exitFeeSol,
   }) {
-    final entry = position.entrySol;
-    final pnl = realizedSol - entry;
+    // Remover de posiciones cerradas si existe
+    final remainingClosed = state.closedPositions
+        .where((p) => p.sellSignature != sellSignature)
+        .toList();
+
+    // Restaurar a posiciones abiertas si no existe
+    final existsInOpen = state.positions.any(
+      (p) => p.entrySignature == position.entrySignature,
+    );
+    final restoredPositions = existsInOpen
+        ? state.positions
+        : [...state.positions, position];
+
+    // Revertir fondos liberados (buscar en cerradas)
+    final closedToRevert = state.closedPositions
+        .where((p) => p.sellSignature == sellSignature)
+        .toList();
+
+    var revertedAvailable = state.availableBudgetSol;
+    if (closedToRevert.isNotEmpty) {
+      final closed = closedToRevert.first;
+      revertedAvailable -= closed.exitSol;
+      if (revertedAvailable < 0) {
+        revertedAvailable = 0;
+      }
+    }
+
+    _setState(
+      state.copyWith(
+        positions: restoredPositions,
+        closedPositions: remainingClosed,
+        availableBudgetSol: revertedAvailable,
+      ),
+    );
+  }
+
+  /// ⚡ ACTUALIZACIÓN INMEDIATA: Remover posición y liberar fondos sin esperar confirmación
+  /// Se llama inmediatamente después de enviar la transacción de venta
+  void completePositionSaleImmediate({
+    required OpenPosition position,
+    required String sellSignature,
+    required double expectedSol,
+    bool isPartialSale = false,
+    double salePercent = 100.0,
+    double tokensSold = 0,
+    double? triggeredLevelPnl,
+  }) {
+    // ⚡ VENTA PARCIAL: Si es parcial, actualizar posición en lugar de removerla
+    if (isPartialSale && salePercent < 100.0) {
+      final remainingTokens = (position.tokenAmount ?? 0) - tokensSold;
+      final newPartialSalePercent = position.partialSalePercent + salePercent;
+      final entryProportion = position.entrySol * (salePercent / 100.0);
+      // ⚡ Agregar nivel activado a la lista si es una venta escalonada
+      final updatedTriggeredLevels = triggeredLevelPnl != null
+          ? (List<double>.from(position.triggeredSaleLevels)
+              ..add(triggeredLevelPnl))
+          : position.triggeredSaleLevels;
+      final updatedPosition = position.copyWith(
+        tokenAmount: remainingTokens > 0 ? remainingTokens : 0,
+        partialSalePercent: newPartialSalePercent,
+        entrySol:
+            position.entrySol -
+            entryProportion, // Ajustar entrySol proporcionalmente
+        triggeredSaleLevels: updatedTriggeredLevels,
+        // ⚡ CORREGIDO: Limpiar alerta después de venta parcial para permitir nuevos niveles
+        alertType: null,
+        alertTriggeredAt: null,
+      );
+
+      final updatedPositions = state.positions
+          .map(
+            (p) => p.entrySignature == position.entrySignature
+                ? updatedPosition
+                : p,
+          )
+          .toList();
+
+      // Liberar fondos proporcionales
+      var nextAvailable = state.availableBudgetSol + expectedSol;
+      if (nextAvailable > state.totalBudgetSol) {
+        nextAvailable = state.totalBudgetSol;
+      }
+
+      // Calcular PnL parcial
+      final pnl = expectedSol - entryProportion;
+      var nextTotal = state.totalBudgetSol + pnl;
+      if (nextTotal < 0) {
+        nextTotal = 0;
+      }
+
+      _setState(
+        state.copyWith(
+          positions: updatedPositions,
+          totalBudgetSol: nextTotal,
+          availableBudgetSol: nextAvailable,
+          realizedProfitSol: state.realizedProfitSol + pnl,
+        ),
+      );
+      return;
+    }
+
+    // ⚡ VENTA COMPLETA: Remover de posiciones abiertas inmediatamente
     final remaining = state.positions
         .where((p) => p.entrySignature != position.entrySignature)
         .toList(growable: false);
+
+    // Liberar fondos inmediatamente (expectedSol)
+    var nextAvailable = state.availableBudgetSol + expectedSol;
+    if (nextAvailable > state.totalBudgetSol) {
+      nextAvailable = state.totalBudgetSol;
+    }
+
+    // Calcular PnL preliminar
+    final entry = position.entrySol;
+    final pnl = expectedSol - entry;
     var nextTotal = state.totalBudgetSol + pnl;
     if (nextTotal < 0) {
       nextTotal = 0;
     }
-    var nextAvailable = state.availableBudgetSol + realizedSol;
-    if (nextAvailable < 0) {
-      nextAvailable = 0;
-    } else if (nextAvailable > nextTotal) {
-      nextAvailable = nextTotal;
-    }
-    var withdrawn = state.withdrawnProfitSol;
-    if (state.withdrawOnGain && pnl > 0) {
-      nextTotal -= pnl;
-      if (nextTotal < 0) {
-        nextTotal = 0;
-      }
-      nextAvailable -= pnl;
-      if (nextAvailable < 0) {
-        nextAvailable = 0;
-      } else if (nextAvailable > nextTotal) {
-        nextAvailable = nextTotal;
-      }
-      withdrawn += pnl;
-    }
-    // Construir y guardar posición cerrada
+
+    // Crear posición cerrada preliminar (se actualizará con datos reales después)
     final tokenAmount = position.tokenAmount ?? 0;
     final inferredEntryPrice = tokenAmount > 0
         ? (position.entrySol / tokenAmount)
         : (position.entryPriceSol ?? 0);
     final inferredExitPrice = tokenAmount > 0
-        ? (realizedSol / tokenAmount)
+        ? (expectedSol / tokenAmount)
         : (position.lastPriceSol ?? 0);
-    final exitFee = exitFeeSol ?? position.exitFeeSol;
-    final entryFee = position.entryFeeSol;
-    final netPnl = (entryFee != null && exitFee != null)
-        ? (pnl - (entryFee) - (exitFee))
-        : null;
+
     final closed = ClosedPosition(
       mint: position.mint,
       symbol: position.symbol,
       executionMode: position.executionMode,
       entrySol: position.entrySol,
-      exitSol: realizedSol,
+      exitSol:
+          expectedSol, // ⚡ Preliminar - se actualizará con realizedSol después
       tokenAmount: tokenAmount,
       entryPriceSol: position.entryPriceSol ?? inferredEntryPrice,
       exitPriceSol: inferredExitPrice,
@@ -1187,23 +1558,199 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
       buySignature: position.entrySignature,
       sellSignature: sellSignature,
       closeReason: position.alertType,
-      entryFeeSol: entryFee,
-      exitFeeSol: exitFee,
-      netPnlSol: netPnl,
+      entryFeeSol: position.entryFeeSol,
+      exitFeeSol: null, // ⚡ Se calculará después cuando se confirme
+      netPnlSol: null, // ⚡ Se calculará después cuando se confirme
     );
+
     final newClosed = [...state.closedPositions, closed];
     _setState(
       state.copyWith(
-        positions: remaining,
+        positions: remaining, // ⚡ Removido inmediatamente
         closedPositions: newClosed,
         totalBudgetSol: nextTotal,
-        availableBudgetSol: nextAvailable,
+        availableBudgetSol: nextAvailable, // ⚡ Fondos liberados inmediatamente
         realizedProfitSol: state.realizedProfitSol + pnl,
-        withdrawnProfitSol: withdrawn,
       ),
     );
+
+    // ⚡ COOLDOWN: Notificar al executor que se vendió este token
+    // Esto se hace a través de un callback o evento, pero por ahora
+    // el executor lo manejará en _trackSellConfirmation
+  }
+
+  /// 🔄 ACTUALIZACIÓN CON DATOS REALES: Se llama cuando se confirma la transacción
+  /// Actualiza la posición cerrada existente con datos reales (realizedSol, fees, etc.)
+  /// La posición ya fue removida inmediatamente, solo actualizamos los datos
+  /// ⚡ Fees exactos obtenidos post-venta desde Helius Enhanced API (no bloquea la venta)
+  void completePositionSale({
+    required OpenPosition position,
+    required String sellSignature,
+    required double realizedSol,
+    double? exitFeeSol,
+    double? baseFeeSol,
+    double? priorityFeeSol,
+  }) {
+    // ⚡ La posición ya fue removida inmediatamente, solo actualizamos datos
+    final entry = position.entrySol;
+    final pnl = realizedSol - entry;
+
+    // Ajustar fondos si realizedSol difiere de expectedSol
+    ClosedPosition? existingClosed;
+    try {
+      existingClosed = state.closedPositions.firstWhere(
+        (p) => p.sellSignature == sellSignature,
+      );
+    } catch (_) {
+      existingClosed = null;
+    }
+
+    if (existingClosed != null) {
+      // Actualizar posición cerrada existente con datos reales
+      final tokenAmount = position.tokenAmount ?? 0;
+      final inferredExitPrice = tokenAmount > 0
+          ? (realizedSol / tokenAmount)
+          : (position.lastPriceSol ?? 0);
+
+      // ⚡ Usar fees exactos de Helius si están disponibles, sino usar estimación
+      final exitFee = exitFeeSol ?? position.exitFeeSol;
+      final entryFee = position.entryFeeSol;
+
+      // Calcular netPnl usando fees exactos si están disponibles
+      double? netPnl;
+      if (entryFee != null && exitFee != null) {
+        // Si tenemos baseFee y priorityFee exactos, podemos calcular netPnl más preciso
+        // Pero por ahora usamos exitFee total (que ya incluye base + priority si viene de Helius)
+        netPnl = pnl - entryFee - exitFee;
+      }
+
+      final updatedClosed = existingClosed.copyWith(
+        exitSol: realizedSol,
+        exitPriceSol: inferredExitPrice,
+        pnlSol: pnl,
+        pnlPercent: position.entrySol == 0
+            ? 0
+            : (pnl / position.entrySol) * 100,
+        exitFeeSol: exitFee, // ⚡ Fee exacto de Helius si está disponible
+        netPnlSol: netPnl,
+      );
+
+      // Reemplazar posición cerrada con datos actualizados
+      final updatedClosedList = state.closedPositions
+          .map((p) => p.sellSignature == sellSignature ? updatedClosed : p)
+          .toList();
+
+      // Ajustar budget si realizedSol difiere de expectedSol
+      var nextAvailable = state.availableBudgetSol;
+      var nextTotal = state.totalBudgetSol;
+      if (realizedSol != existingClosed.exitSol) {
+        final diff = realizedSol - existingClosed.exitSol;
+        nextAvailable += diff;
+        nextTotal += (pnl - existingClosed.pnlSol);
+        if (nextAvailable < 0) {
+          nextAvailable = 0;
+        } else if (nextAvailable > nextTotal) {
+          nextAvailable = nextTotal;
+        }
+        if (nextTotal < 0) {
+          nextTotal = 0;
+        }
+      }
+
+      var withdrawn = state.withdrawnProfitSol;
+      if (state.withdrawOnGain && pnl > 0) {
+        final pnlDiff = pnl - existingClosed.pnlSol;
+        if (pnlDiff > 0) {
+          nextTotal -= pnlDiff;
+          if (nextTotal < 0) {
+            nextTotal = 0;
+          }
+          nextAvailable -= pnlDiff;
+          if (nextAvailable < 0) {
+            nextAvailable = 0;
+          } else if (nextAvailable > nextTotal) {
+            nextAvailable = nextTotal;
+          }
+          withdrawn += pnlDiff;
+        }
+      }
+
+      _setState(
+        state.copyWith(
+          closedPositions: updatedClosedList,
+          totalBudgetSol: nextTotal,
+          availableBudgetSol: nextAvailable,
+          realizedProfitSol:
+              state.realizedProfitSol + (pnl - existingClosed.pnlSol),
+          withdrawnProfitSol: withdrawn,
+        ),
+      );
+    } else {
+      // Si no existe (no debería pasar), crear nueva posición cerrada
+      final tokenAmount = position.tokenAmount ?? 0;
+      final inferredEntryPrice = tokenAmount > 0
+          ? (position.entrySol / tokenAmount)
+          : (position.entryPriceSol ?? 0);
+      final inferredExitPrice = tokenAmount > 0
+          ? (realizedSol / tokenAmount)
+          : (position.lastPriceSol ?? 0);
+      // ⚡ Usar fees exactos de Helius si están disponibles
+      final exitFee = exitFeeSol ?? position.exitFeeSol;
+      final entryFee = position.entryFeeSol;
+
+      // Calcular netPnl usando fees exactos si están disponibles
+      double? netPnl;
+      if (entryFee != null && exitFee != null) {
+        netPnl = pnl - entryFee - exitFee;
+      }
+
+      final closed = ClosedPosition(
+        mint: position.mint,
+        symbol: position.symbol,
+        executionMode: position.executionMode,
+        entrySol: position.entrySol,
+        exitSol: realizedSol,
+        tokenAmount: tokenAmount,
+        entryPriceSol: position.entryPriceSol ?? inferredEntryPrice,
+        exitPriceSol: inferredExitPrice,
+        pnlSol: pnl,
+        pnlPercent: position.entrySol == 0
+            ? 0
+            : (pnl / position.entrySol) * 100,
+        openedAt: position.openedAt,
+        closedAt: DateTime.now(),
+        buySignature: position.entrySignature,
+        sellSignature: sellSignature,
+        closeReason: position.alertType,
+        entryFeeSol: entryFee,
+        exitFeeSol: exitFee, // ⚡ Fee exacto de Helius si está disponible
+        netPnlSol: netPnl,
+      );
+
+      final newClosed = [...state.closedPositions, closed];
+      var nextTotal = state.totalBudgetSol + pnl;
+      if (nextTotal < 0) {
+        nextTotal = 0;
+      }
+      var nextAvailable = state.availableBudgetSol + realizedSol;
+      if (nextAvailable < 0) {
+        nextAvailable = 0;
+      } else if (nextAvailable > nextTotal) {
+        nextAvailable = nextTotal;
+      }
+
+      _setState(
+        state.copyWith(
+          closedPositions: newClosed,
+          totalBudgetSol: nextTotal,
+          availableBudgetSol: nextAvailable,
+          realizedProfitSol: state.realizedProfitSol + pnl,
+        ),
+      );
+    }
+
     final msg =
-        'Posición ${position.symbol} cerrada (${pnl >= 0 ? '+' : ''}${pnl.toStringAsFixed(3)} SOL).';
+        'Posición ${position.symbol} confirmada (${pnl >= 0 ? '+' : ''}${pnl.toStringAsFixed(3)} SOL).';
     setStatus(msg, level: pnl >= 0 ? AppLogLevel.success : AppLogLevel.neutral);
   }
 
@@ -1217,6 +1764,7 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     PositionAlertType? alertType,
     DateTime? alertTriggeredAt,
     bool updateAlert = false,
+    double? maxPnlPercentReached,
   }) {
     final positions = state.positions;
     final index = positions.indexWhere(
@@ -1225,7 +1773,8 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     if (index < 0) return;
     final current = positions[index];
 
-    final bool alertChanged = updateAlert &&
+    final bool alertChanged =
+        updateAlert &&
         (current.alertType != alertType ||
             current.alertTriggeredAt != alertTriggeredAt);
     final bool metricsChanged =
@@ -1244,6 +1793,7 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
       pnlSol: pnlSol,
       pnlPercent: pnlPercent,
       lastCheckedAt: checkedAt,
+      maxPnlPercentReached: maxPnlPercentReached,
     );
     if (updateAlert) {
       next = next.copyWith(

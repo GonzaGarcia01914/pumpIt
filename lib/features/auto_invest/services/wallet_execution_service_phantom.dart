@@ -6,6 +6,10 @@ import 'package:js/js.dart';
 import 'package:js/js_util.dart' as jsu;
 
 class WalletExecutionService {
+  WalletExecutionService({dynamic websocketService}) {
+    // Phantom - ignora websocketService (no disponible en web)
+  }
+
   _PhantomProvider? get _provider => _phantomProvider();
 
   bool get isAvailable => _provider?.isPhantom == true;
@@ -89,6 +93,12 @@ class WalletExecutionService {
   Future<double?> getWalletBalance(String address) async => null;
 
   Future<double?> getTransactionFee(String signature) async => null;
+
+  Future<String> getLatestBlockhash() async {
+    // Sin RPC disponible en web, no se puede obtener blockhash.
+    // Phantom maneja esto internamente.
+    throw UnsupportedError('getLatestBlockhash no disponible en web.');
+  }
 
   String? _extractPublicKey(_PhantomProvider provider) {
     final pk = provider.publicKey;
