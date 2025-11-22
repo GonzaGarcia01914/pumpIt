@@ -7,6 +7,10 @@ import '../services/pump_fun_price_service.dart';
 import '../services/pool_monitor_service.dart';
 import '../services/whale_tracker_service.dart';
 import '../services/token_security_analyzer.dart';
+import '../models/trailing_config.dart';
+import '../services/dynamic_trailing_stop_service.dart';
+import '../services/dynamic_slippage_service.dart';
+import '../services/dynamic_priority_fee_service.dart';
 import 'auto_invest_executor.dart';
 import 'auto_invest_notifier.dart';
 import '../../../core/log/global_log.dart';
@@ -280,11 +284,41 @@ class AutoInvestPositionMonitor {
           ? pnlPercent
           : position.maxPnlPercentReached;
 
+      // ⚡ Calcular trailing stop dinámico si está habilitado
+      double? dynamicTrailingPercent;
+      if (state.trailingStopEnabled &&
+          state.dynamicTrailingEnabled &&
+          maxPnlPercentReached != null &&
+          maxPnlPercentReached > 0) {
+        try {
+          final calculatedTrailing = await _calculateDynamicTrailing(
+            position,
+            state,
+            maxPnlPercentReached,
+          );
+
+          // 📝 Log cuando el trailing stop cambia
+          if ((calculatedTrailing - state.trailingStopPercent).abs() > 0.5) {
+            ref
+                .read(autoInvestProvider.notifier)
+                .setStatus(
+                  '📉 Trailing Stop ajustado: ${state.trailingStopPercent.toStringAsFixed(2)}% → ${calculatedTrailing.toStringAsFixed(2)}% para ${position.symbol}',
+                );
+          }
+
+          dynamicTrailingPercent = calculatedTrailing;
+        } catch (_) {
+          // Si falla, usar el trailing base
+          dynamicTrailingPercent = state.trailingStopPercent;
+        }
+      }
+
       final alertUpdate = _evaluateAlert(
         position,
         state,
         pnlPercent,
         maxPnlPercentReached,
+        dynamicTrailingPercent,
       );
 
       // ⚡ CORREGIDO: Limpiar alerta si el precio ya no cumple las condiciones
@@ -325,6 +359,18 @@ class AutoInvestPositionMonitor {
       // 🐋 MONITOREO DE WHALES: Detectar si el creator está vendiendo
       // Si el creator vende, salir inmediatamente (no esperar stop loss)
       unawaited(_checkWhaleActivityForPosition(position));
+
+      // ⚡ CALCULAR INFORMACIÓN DE SALIDA EN BACKGROUND (no bloquea)
+      // Esto incluye: trailing stop actual, precio de salida, priority fee, slippage
+      unawaited(
+        _calculateExitInfoInBackground(
+          position,
+          state,
+          pnlPercent,
+          maxPnlPercentReached,
+          dynamicTrailingPercent,
+        ),
+      );
 
       // Intento de venta inicial + reintentos si la alerta está activa
       final activeAlert =
@@ -461,20 +507,30 @@ class AutoInvestPositionMonitor {
     AutoInvestState state,
     double? pnlPercent,
     double? maxPnlPercentReached,
+    double? dynamicTrailingPercent,
   ) {
     if (pnlPercent == null) return null;
     final now = DateTime.now();
 
-    // ⚡ TRAILING STOP: Si está habilitado y hay un máximo alcanzado
+    // 🛡️ HARD STOP DE SEGURIDAD: Siempre verificar primero (evita dumps grandes)
+    // Este es un stop fijo que siempre se aplica, independientemente del trailing
+    if (pnlPercent <= -state.hardStopPercent) {
+      return _AlertUpdate(PositionAlertType.stopLoss, now);
+    }
+
+    // ⚡ TRAILING STOP DINÁMICO: Si está habilitado y hay un máximo alcanzado
     // ⚡ CORREGIDO: El trailing stop tiene prioridad sobre los niveles fijos de stop loss
     // ⚡ PERO: Solo si no hay una venta parcial en progreso (para evitar interferir con ventas escalonadas)
     if (state.trailingStopEnabled &&
         maxPnlPercentReached != null &&
         maxPnlPercentReached > 0) {
-      final trailingStopThreshold =
-          maxPnlPercentReached - state.trailingStopPercent;
+      // Calcular trailing stop dinámico basado en condiciones del mercado
+      // Usar el trailing dinámico calculado, o el base si no está disponible
+      final trailingToUse = dynamicTrailingPercent ?? state.trailingStopPercent;
+
+      final trailingStopThreshold = maxPnlPercentReached - trailingToUse;
       if (pnlPercent < trailingStopThreshold) {
-        // El precio cayó por debajo del trailing stop
+        // El precio cayó por debajo del trailing stop dinámico
         // ⚡ CORREGIDO: Verificar que no haya una venta parcial en progreso
         // Si hay ventas escalonadas activas, el trailing stop puede interferir
         // Solo activar si no hay niveles de stop loss escalonados o si ya se activaron todos
@@ -550,6 +606,197 @@ class AutoInvestPositionMonitor {
     }
 
     return null;
+  }
+
+  /// 📊 Calcular trailing stop dinámico basado en condiciones del mercado
+  Future<double> _calculateDynamicTrailing(
+    OpenPosition position,
+    AutoInvestState state,
+    double maxPnlPercentReached,
+  ) async {
+    try {
+      final dynamicTrailingService = ref.read(
+        dynamicTrailingStopServiceProvider,
+      );
+      final slippageService = ref.read(dynamicSlippageServiceProvider);
+      final whaleService = ref.read(whaleTrackerServiceProvider);
+      final securityService = ref.read(tokenSecurityAnalyzerProvider);
+
+      // Obtener historial de precios
+      final priceHistory = slippageService.getPriceHistory(position.mint);
+      final currentPrice = position.lastPriceSol;
+
+      // Obtener análisis de whales (con timeout corto para no bloquear)
+      WhaleAnalysis? whaleAnalysis;
+      try {
+        whaleAnalysis = await whaleService
+            .analyzeTokenActivity(
+              mint: position.mint,
+              lookbackWindow: const Duration(minutes: 2),
+            )
+            .timeout(const Duration(seconds: 1));
+      } catch (_) {
+        // Ignorar errores, usar null
+        whaleAnalysis = null;
+      }
+
+      // Obtener score de seguridad (con timeout corto)
+      TokenSecurityScore? securityScore;
+      try {
+        securityScore = await securityService
+            .analyzeToken(position.mint)
+            .timeout(const Duration(seconds: 1));
+      } catch (_) {
+        // Ignorar errores, usar null
+        securityScore = null;
+      }
+
+      // Obtener configuración seleccionada
+      final config = TrailingConfig.fromPreset(state.trailingConfigPreset);
+
+      // Calcular trailing dinámico (con timeout)
+      final params = DynamicTrailingParams(
+        baseTrailingPercent: state.trailingStopPercent,
+        mint: position.mint,
+        config: config,
+        currentPrice: currentPrice,
+        priceHistory: priceHistory,
+        whaleAnalysis: whaleAnalysis,
+        securityScore: securityScore,
+      );
+
+      final result = await dynamicTrailingService
+          .calculateOptimalTrailing(params)
+          .timeout(const Duration(seconds: 2));
+
+      // Retornar el trailing dinámico calculado
+      return result.optimalTrailingPercent;
+    } catch (_) {
+      // Si hay cualquier error, usar el trailing base
+      return state.trailingStopPercent;
+    }
+  }
+
+  /// ⚡ Calcular información de salida en background (no bloquea operaciones críticas)
+  /// Calcula: trailing stop actual, precio de salida, priority fee, slippage
+  Future<void> _calculateExitInfoInBackground(
+    OpenPosition position,
+    AutoInvestState state,
+    double? pnlPercent,
+    double? maxPnlPercentReached,
+    double? dynamicTrailingPercent,
+  ) async {
+    try {
+      // 1. Calcular trailing stop actual
+      double? currentTrailingStop;
+      double? currentExitPrice;
+
+      if (state.trailingStopEnabled &&
+          maxPnlPercentReached != null &&
+          maxPnlPercentReached > 0) {
+        // Usar trailing dinámico si está habilitado, sino usar el fijo
+        currentTrailingStop =
+            dynamicTrailingPercent ?? state.trailingStopPercent;
+
+        // Calcular precio de salida: precio de entrada * (1 + maxPnl% - trailing%)
+        if (position.entryPriceSol != null) {
+          final exitPnlPercent = maxPnlPercentReached - currentTrailingStop;
+          currentExitPrice =
+              position.entryPriceSol! * (1 + exitPnlPercent / 100);
+        }
+      } else if (state.stopLossLevels.isNotEmpty) {
+        // Si hay stop loss escalonado, usar el nivel más bajo
+        final lowestStopLoss = state.stopLossLevels
+            .map((level) => level.pnlPercent)
+            .reduce((a, b) => a < b ? a : b);
+        currentTrailingStop = lowestStopLoss.abs();
+        if (position.entryPriceSol != null) {
+          currentExitPrice =
+              position.entryPriceSol! * (1 + lowestStopLoss / 100);
+        }
+      } else if (state.stopLossPercent > 0) {
+        // Stop loss fijo
+        currentTrailingStop = state.stopLossPercent;
+        if (position.entryPriceSol != null) {
+          currentExitPrice =
+              position.entryPriceSol! * (1 - state.stopLossPercent / 100);
+        }
+      }
+
+      // 2. Calcular priority fee actual (con timeout corto para no bloquear)
+      double? currentPriorityFee;
+      try {
+        final dynamicFeeService = ref.read(dynamicPriorityFeeServiceProvider);
+        currentPriorityFee = await dynamicFeeService
+            .calculateOptimalFee(
+              baseFee: state.pumpPriorityFeeSol,
+              mint: position.mint,
+              isRetry: false,
+              previousFailure: false,
+            )
+            .timeout(const Duration(seconds: 1));
+      } catch (_) {
+        // Si falla, usar fee base
+        currentPriorityFee = state.pumpPriorityFeeSol;
+      }
+
+      // 3. Calcular slippage actual (con timeout corto)
+      double? currentSlippage;
+      try {
+        final dynamicSlippageService = ref.read(dynamicSlippageServiceProvider);
+        final priceHistory = dynamicSlippageService.getPriceHistory(
+          position.mint,
+        );
+        final currentPrice = position.lastPriceSol ?? position.entryPriceSol;
+
+        if (currentPrice != null && position.tokenAmount != null) {
+          final orderSizeSol = position.tokenAmount! * currentPrice;
+          final currentQuote = await priceService
+              .fetchQuote(position.mint)
+              .timeout(const Duration(seconds: 1));
+
+          final params = SlippageCalculationParams(
+            baseSlippagePercent: state.pumpSlippagePercent,
+            orderSizeSol: orderSizeSol,
+            currentPriceSol: currentPrice,
+            liquiditySol: currentQuote.liquiditySol,
+            priceHistory: priceHistory,
+            volatility: null, // Se calcula internamente
+          );
+
+          currentSlippage = await dynamicSlippageService
+              .calculateOptimalSlippage(params)
+              .timeout(const Duration(seconds: 1));
+        } else {
+          currentSlippage = state.pumpSlippagePercent;
+        }
+      } catch (_) {
+        // Si falla, usar slippage base
+        currentSlippage = state.pumpSlippagePercent;
+      }
+
+      // 4. Actualizar posición con la información calculada (sin bloquear)
+      ref
+          .read(autoInvestProvider.notifier)
+          .updatePositionMonitoring(
+            position.entrySignature,
+            priceSol: position.lastPriceSol ?? position.entryPriceSol ?? 0,
+            currentValueSol: position.currentValueSol ?? 0,
+            pnlSol: position.pnlSol ?? 0,
+            pnlPercent: position.pnlPercent,
+            checkedAt: position.lastCheckedAt ?? DateTime.now(),
+            alertType: position.alertType,
+            alertTriggeredAt: position.alertTriggeredAt,
+            updateAlert: false, // No actualizar alerta, solo info de salida
+            maxPnlPercentReached: position.maxPnlPercentReached,
+            currentTrailingStopPercent: currentTrailingStop,
+            currentExitPriceSol: currentExitPrice,
+            currentPriorityFeeSol: currentPriorityFee,
+            currentSlippagePercent: currentSlippage,
+          );
+    } catch (_) {
+      // Ignorar errores en background, no afectar operaciones críticas
+    }
   }
 
   void _handleError(OpenPosition position, Object error) {

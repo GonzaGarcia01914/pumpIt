@@ -9,6 +9,7 @@ import '../../featured_coins/models/featured_coin.dart';
 import '../controller/auto_invest_notifier.dart';
 import '../models/execution_mode.dart';
 import '../models/sale_level.dart';
+import '../models/trailing_config.dart';
 import '../../../core/widgets/hover_glow.dart';
 import '../../../core/widgets/soft_surface.dart';
 import 'widgets/analysis_drawer_panel.dart';
@@ -372,7 +373,9 @@ class _FilterSection extends StatelessWidget {
                       .map(
                         (unit) => DropdownMenuItem(
                           value: unit,
-                          child: Text(unit == VolumeTimeUnit.minutes ? 'min' : 'h'),
+                          child: Text(
+                            unit == VolumeTimeUnit.minutes ? 'min' : 'h',
+                          ),
                         ),
                       )
                       .toList(),
@@ -597,7 +600,8 @@ class _RiskSection extends StatelessWidget {
             levels: state.takeProfitLevels,
             onAdd: (level) => notifier.addTakeProfitLevel(level),
             onRemove: (index) => notifier.removeTakeProfitLevel(index),
-            onUpdate: (index, level) => notifier.updateTakeProfitLevel(index, level),
+            onUpdate: (index, level) =>
+                notifier.updateTakeProfitLevel(index, level),
             isTakeProfit: true,
           ),
           const SizedBox(height: 16),
@@ -606,7 +610,8 @@ class _RiskSection extends StatelessWidget {
             levels: state.stopLossLevels,
             onAdd: (level) => notifier.addStopLossLevel(level),
             onRemove: (index) => notifier.removeStopLossLevel(index),
-            onUpdate: (index, level) => notifier.updateStopLossLevel(index, level),
+            onUpdate: (index, level) =>
+                notifier.updateStopLossLevel(index, level),
             isTakeProfit: false,
           ),
           const SizedBox(height: 16),
@@ -626,10 +631,53 @@ class _RiskSection extends StatelessWidget {
               min: 1,
               max: 50,
               suffix: '%',
-              subtitle: 'Porcentaje de retroceso desde el máximo para activar stop loss',
+              subtitle:
+                  'Porcentaje de retroceso desde el máximo para activar stop loss',
               onChanged: notifier.updateTrailingStopPercent,
             ),
+            const SizedBox(height: 16),
+            SwitchListTile.adaptive(
+              value: state.dynamicTrailingEnabled,
+              onChanged: notifier.updateDynamicTrailingEnabled,
+              title: const Text('Trailing Stop Dinámico'),
+              subtitle: const Text(
+                'Ajusta el trailing stop según volatilidad, whales y warnings del mercado',
+              ),
+            ),
+            if (state.dynamicTrailingEnabled) ...[
+              const SizedBox(height: 12),
+              const Text(
+                'Configuración de Trailing Dinámico:',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              ...TrailingConfigPreset.values.map((preset) {
+                final config = TrailingConfig.fromPreset(preset);
+                return RadioListTile<TrailingConfigPreset>(
+                  title: Text(config.name),
+                  subtitle: Text(config.description),
+                  value: preset,
+                  groupValue: state.trailingConfigPreset,
+                  onChanged: (TrailingConfigPreset? value) {
+                    if (value != null) {
+                      notifier.updateTrailingConfigPreset(value);
+                    }
+                  },
+                );
+              }),
+            ],
           ],
+          const SizedBox(height: 16),
+          _SliderTile(
+            label: 'Hard Stop de Seguridad',
+            value: state.hardStopPercent.clamp(5, 50),
+            min: 5,
+            max: 50,
+            suffix: '%',
+            subtitle:
+                'Stop loss fijo de seguridad que siempre se aplica (evita dumps grandes)',
+            onChanged: notifier.updateHardStopPercent,
+          ),
           const SizedBox(height: 12),
           SwitchListTile.adaptive(
             value: state.withdrawOnGain,
@@ -721,6 +769,15 @@ class _EliteFeaturesSection extends ConsumerWidget {
             title: 'Manejo de Errores Inteligente',
             description:
                 'Clasifica errores y aplica circuit breaker para evitar loops infinitos',
+            status: 'Activo',
+            isActive: true,
+          ),
+          const SizedBox(height: 12),
+          _EliteFeatureCard(
+            icon: Icons.trending_down,
+            title: 'Trailing Stop Dinámico',
+            description:
+                'Ajusta trailing stop según volatilidad, whales y warnings del mercado',
             status: 'Activo',
             isActive: true,
           ),
@@ -824,7 +881,9 @@ class _EliteFeatureCard extends StatelessWidget {
                           fontWeight: FontWeight.w600,
                           color: isActive
                               ? theme.colorScheme.onSurface
-                              : theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                              : theme.colorScheme.onSurface.withValues(
+                                  alpha: 0.7,
+                                ),
                         ),
                       ),
                     ),
@@ -886,7 +945,8 @@ class _LimitsSection extends StatelessWidget {
           _NumberField(
             label: 'Máx. tokens simultáneos',
             value: state.maxTokensSimultaneous.toDouble(),
-            onChanged: (value) => notifier.updateMaxTokensSimultaneous(value.toInt()),
+            onChanged: (value) =>
+                notifier.updateMaxTokensSimultaneous(value.toInt()),
             suffix: 'tokens',
           ),
           const SizedBox(height: 16),
@@ -1523,26 +1583,32 @@ class _SaleLevelDialogState extends State<_SaleLevelDialog> {
     final pnl = double.tryParse(_pnlController.text);
     final sell = double.tryParse(_sellController.text);
     if (pnl == null || sell == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Valores inválidos')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Valores inválidos')));
       return;
     }
     if (widget.isTakeProfit && pnl <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('El PnL para Take Profit debe ser positivo')),
+        const SnackBar(
+          content: Text('El PnL para Take Profit debe ser positivo'),
+        ),
       );
       return;
     }
     if (!widget.isTakeProfit && pnl >= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('El PnL para Stop Loss debe ser negativo')),
+        const SnackBar(
+          content: Text('El PnL para Stop Loss debe ser negativo'),
+        ),
       );
       return;
     }
     if (sell < 0 || sell > 100) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('El porcentaje a vender debe estar entre 0 y 100')),
+        const SnackBar(
+          content: Text('El porcentaje a vender debe estar entre 0 y 100'),
+        ),
       );
       return;
     }
@@ -1553,7 +1619,9 @@ class _SaleLevelDialogState extends State<_SaleLevelDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: Text(widget.isTakeProfit ? 'Nivel Take Profit' : 'Nivel Stop Loss'),
+      title: Text(
+        widget.isTakeProfit ? 'Nivel Take Profit' : 'Nivel Stop Loss',
+      ),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1585,10 +1653,7 @@ class _SaleLevelDialogState extends State<_SaleLevelDialog> {
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Cancelar'),
         ),
-        FilledButton(
-          onPressed: _save,
-          child: const Text('Guardar'),
-        ),
+        FilledButton(onPressed: _save, child: const Text('Guardar')),
       ],
     );
   }
@@ -1894,8 +1959,9 @@ class _ActionShortcuts extends StatelessWidget {
         subtitle: 'Insights IA/heurístico',
         colors: const [Color(0xFF4FD1FF), Color(0xFF7B89FF)],
         icon: Icons.bolt,
-        onTap:
-            state.isAnalyzingResults ? null : notifier.analyzeClosedPositions,
+        onTap: state.isAnalyzingResults
+            ? null
+            : notifier.analyzeClosedPositions,
       ),
       _ShortcutData(
         title: state.isEnabled ? 'Pausar bot' : 'Activar bot',

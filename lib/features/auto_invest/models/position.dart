@@ -38,6 +38,10 @@ class OpenPosition extends Equatable {
     this.partialSalePercent = 0,
     this.triggeredSaleLevels = const [],
     this.maxPnlPercentReached,
+    this.currentTrailingStopPercent,
+    this.currentExitPriceSol,
+    this.currentPriorityFeeSol,
+    this.currentSlippagePercent,
   });
 
   final String mint;
@@ -60,7 +64,17 @@ class OpenPosition extends Equatable {
   final bool isClosing;
   final double partialSalePercent;
   final List<double> triggeredSaleLevels; // PnL % de niveles ya activados
-  final double? maxPnlPercentReached; // Máximo PnL alcanzado (para trailing stop)
+  final double?
+  maxPnlPercentReached; // Máximo PnL alcanzado (para trailing stop)
+  // ⚡ Información de salida actual (calculada en background, no afecta rendimiento)
+  final double?
+  currentTrailingStopPercent; // Trailing stop actual (dinámico o fijo)
+  final double?
+  currentExitPriceSol; // Precio de salida actual (precio entrada + trailing)
+  final double?
+  currentPriorityFeeSol; // Priority fee actual que se usaría para vender
+  final double?
+  currentSlippagePercent; // Slippage actual que se usaría para vender
 
   bool get hasTokenAmount => tokenAmount != null && tokenAmount! > 0;
 
@@ -84,6 +98,10 @@ class OpenPosition extends Equatable {
     double? partialSalePercent,
     List<double>? triggeredSaleLevels,
     Object? maxPnlPercentReached = _copySentinel,
+    Object? currentTrailingStopPercent = _copySentinel,
+    Object? currentExitPriceSol = _copySentinel,
+    Object? currentPriorityFeeSol = _copySentinel,
+    Object? currentSlippagePercent = _copySentinel,
   }) {
     return OpenPosition(
       mint: mint,
@@ -133,6 +151,19 @@ class OpenPosition extends Equatable {
       maxPnlPercentReached: identical(maxPnlPercentReached, _copySentinel)
           ? this.maxPnlPercentReached
           : maxPnlPercentReached as double?,
+      currentTrailingStopPercent:
+          identical(currentTrailingStopPercent, _copySentinel)
+          ? this.currentTrailingStopPercent
+          : currentTrailingStopPercent as double?,
+      currentExitPriceSol: identical(currentExitPriceSol, _copySentinel)
+          ? this.currentExitPriceSol
+          : currentExitPriceSol as double?,
+      currentPriorityFeeSol: identical(currentPriorityFeeSol, _copySentinel)
+          ? this.currentPriorityFeeSol
+          : currentPriorityFeeSol as double?,
+      currentSlippagePercent: identical(currentSlippagePercent, _copySentinel)
+          ? this.currentSlippagePercent
+          : currentSlippagePercent as double?,
     );
   }
 
@@ -158,6 +189,10 @@ class OpenPosition extends Equatable {
     'partialSalePercent': partialSalePercent,
     'triggeredSaleLevels': triggeredSaleLevels,
     'maxPnlPercentReached': maxPnlPercentReached,
+    'currentTrailingStopPercent': currentTrailingStopPercent,
+    'currentExitPriceSol': currentExitPriceSol,
+    'currentPriorityFeeSol': currentPriorityFeeSol,
+    'currentSlippagePercent': currentSlippagePercent,
   };
 
   factory OpenPosition.fromJson(Map<String, dynamic> json) {
@@ -201,12 +236,19 @@ class OpenPosition extends Equatable {
       exitFeeSol: (json['exitFeeSol'] as num?)?.toDouble(),
       isClosing: json['isClosing'] as bool? ?? false,
       partialSalePercent: (json['partialSalePercent'] as num?)?.toDouble() ?? 0,
-      triggeredSaleLevels: (json['triggeredSaleLevels'] as List<dynamic>?)
+      triggeredSaleLevels:
+          (json['triggeredSaleLevels'] as List<dynamic>?)
               ?.map((e) => (e as num).toDouble())
               .toList() ??
           const [],
-      maxPnlPercentReached:
-          (json['maxPnlPercentReached'] as num?)?.toDouble(),
+      maxPnlPercentReached: (json['maxPnlPercentReached'] as num?)?.toDouble(),
+      currentTrailingStopPercent: (json['currentTrailingStopPercent'] as num?)
+          ?.toDouble(),
+      currentExitPriceSol: (json['currentExitPriceSol'] as num?)?.toDouble(),
+      currentPriorityFeeSol: (json['currentPriorityFeeSol'] as num?)
+          ?.toDouble(),
+      currentSlippagePercent: (json['currentSlippagePercent'] as num?)
+          ?.toDouble(),
     );
   }
 
@@ -231,6 +273,10 @@ class OpenPosition extends Equatable {
     exitFeeSol,
     isClosing,
     partialSalePercent,
+    currentTrailingStopPercent,
+    currentExitPriceSol,
+    currentPriorityFeeSol,
+    currentSlippagePercent,
   ];
 }
 

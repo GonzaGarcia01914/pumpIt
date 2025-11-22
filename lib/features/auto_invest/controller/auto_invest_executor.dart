@@ -971,6 +971,15 @@ class AutoInvestExecutor {
               autoState.pumpPriorityFeeSol, // Fallback a fee base si timeout
         );
 
+    // 📝 Log cuando el priority fee cambia
+    if ((optimalFee - autoState.pumpPriorityFeeSol).abs() > 0.0001) {
+      ref
+          .read(autoInvestProvider.notifier)
+          .setStatus(
+            '💰 Priority Fee ajustado: ${autoState.pumpPriorityFeeSol.toStringAsFixed(6)} → ${optimalFee.toStringAsFixed(6)} SOL para ${candidate.symbol}',
+          );
+    }
+
     // 📊 SLIPPAGE DINÁMICO: Calcular slippage óptimo basado en condiciones del mercado
     final dynamicSlippageService = ref.read(dynamicSlippageServiceProvider);
 
@@ -1001,6 +1010,15 @@ class AutoInvestExecutor {
           onTimeout: () =>
               autoState.pumpSlippagePercent, // Fallback a slippage base
         );
+
+    // 📝 Log cuando el slippage cambia
+    if ((optimalSlippage - autoState.pumpSlippagePercent).abs() > 0.1) {
+      ref
+          .read(autoInvestProvider.notifier)
+          .setStatus(
+            '📊 Slippage ajustado: ${autoState.pumpSlippagePercent.toStringAsFixed(2)}% → ${optimalSlippage.toStringAsFixed(2)}% para ${candidate.symbol}',
+          );
+    }
 
     // Registrar precio actual para tracking de volatilidad
     if (currentQuote != null) {
@@ -1795,6 +1813,15 @@ class AutoInvestExecutor {
               autoState.pumpPriorityFeeSol, // Fallback a fee base si timeout
         );
 
+    // 📝 Log cuando el priority fee cambia
+    if ((optimalFee - autoState.pumpPriorityFeeSol).abs() > 0.0001) {
+      ref
+          .read(autoInvestProvider.notifier)
+          .setStatus(
+            '💰 Priority Fee ajustado: ${autoState.pumpPriorityFeeSol.toStringAsFixed(6)} → ${optimalFee.toStringAsFixed(6)} SOL para venta de ${position.symbol}',
+          );
+    }
+
     // 📊 SLIPPAGE DINÁMICO: Calcular slippage óptimo basado en condiciones del mercado
     final dynamicSlippageService = ref.read(dynamicSlippageServiceProvider);
 
@@ -1828,6 +1855,15 @@ class AutoInvestExecutor {
           onTimeout: () =>
               autoState.pumpSlippagePercent, // Fallback a slippage base
         );
+
+    // 📝 Log cuando el slippage cambia
+    if ((optimalSlippage - autoState.pumpSlippagePercent).abs() > 0.1) {
+      ref
+          .read(autoInvestProvider.notifier)
+          .setStatus(
+            '📊 Slippage ajustado: ${autoState.pumpSlippagePercent.toStringAsFixed(2)}% → ${optimalSlippage.toStringAsFixed(2)}% para venta de ${position.symbol}',
+          );
+    }
 
     // Registrar precio actual para tracking de volatilidad
     if (currentQuote != null) {

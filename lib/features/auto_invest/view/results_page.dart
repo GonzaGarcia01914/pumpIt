@@ -264,8 +264,7 @@ class _ScanFailureBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final surface =
-        theme.colorScheme.errorContainer.withValues(alpha: 0.85);
+    final surface = theme.colorScheme.errorContainer.withValues(alpha: 0.85);
     final onSurface = theme.colorScheme.onErrorContainer;
     return SoftSurface(
       color: surface,
@@ -746,6 +745,37 @@ class _PositionTile extends StatelessWidget {
                     ? Colors.redAccent
                     : theme.colorScheme.primary,
               ),
+              if (position.currentTrailingStopPercent != null)
+                _InfoBadge(
+                  icon: Icons.trending_down,
+                  label: 'Trailing Stop',
+                  value:
+                      '${position.currentTrailingStopPercent!.toStringAsFixed(2)}%',
+                  color: Colors.orangeAccent,
+                ),
+              if (position.currentExitPriceSol != null)
+                _InfoBadge(
+                  icon: Icons.exit_to_app,
+                  label: 'Precio Salida',
+                  value: priceWithUsd(position.currentExitPriceSol),
+                  color: Colors.blueAccent,
+                ),
+              if (position.currentPriorityFeeSol != null)
+                _InfoBadge(
+                  icon: Icons.speed,
+                  label: 'Priority Fee',
+                  value:
+                      '${position.currentPriorityFeeSol!.toStringAsFixed(6)} SOL',
+                  color: Colors.purpleAccent,
+                ),
+              if (position.currentSlippagePercent != null)
+                _InfoBadge(
+                  icon: Icons.swap_horiz,
+                  label: 'Slippage',
+                  value:
+                      '${position.currentSlippagePercent!.toStringAsFixed(2)}%',
+                  color: Colors.tealAccent,
+                ),
             ],
           ),
           const SizedBox(height: 14),

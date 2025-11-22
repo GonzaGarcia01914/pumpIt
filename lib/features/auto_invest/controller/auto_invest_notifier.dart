@@ -9,6 +9,7 @@ import '../models/execution_record.dart';
 import '../models/execution_mode.dart';
 import '../models/position.dart';
 import '../models/sale_level.dart';
+import '../models/trailing_config.dart';
 import '../models/simulation_models.dart';
 import '../services/auto_invest_storage.dart';
 import '../services/wallet_execution_service.dart';
@@ -69,6 +70,9 @@ class AutoInvestState {
     required this.stopLossLevels,
     required this.trailingStopEnabled,
     required this.trailingStopPercent,
+    required this.dynamicTrailingEnabled,
+    required this.trailingConfigPreset,
+    required this.hardStopPercent,
     required this.maxTokensSimultaneous,
     required this.maxLossPerDay,
     required this.maxEarningPerDay,
@@ -129,6 +133,9 @@ class AutoInvestState {
     stopLossLevels: const [],
     trailingStopEnabled: false,
     trailingStopPercent: 5,
+    dynamicTrailingEnabled: false,
+    trailingConfigPreset: TrailingConfigPreset.balanced,
+    hardStopPercent: 20, // Hard stop de seguridad por defecto: -20%
     maxTokensSimultaneous: 0,
     maxLossPerDay: 0,
     maxEarningPerDay: 0,
@@ -187,6 +194,10 @@ class AutoInvestState {
   final List<SaleLevel> stopLossLevels;
   final bool trailingStopEnabled;
   final double trailingStopPercent;
+  final bool dynamicTrailingEnabled; // Habilitar trailing stop dinámico
+  final TrailingConfigPreset trailingConfigPreset; // Configuración seleccionada
+  final double
+  hardStopPercent; // Hard stop de seguridad adicional (-20% por defecto)
   final int maxTokensSimultaneous;
   final double maxLossPerDay;
   final double maxEarningPerDay;
@@ -253,6 +264,9 @@ class AutoInvestState {
     List<SaleLevel>? stopLossLevels,
     bool? trailingStopEnabled,
     double? trailingStopPercent,
+    bool? dynamicTrailingEnabled,
+    TrailingConfigPreset? trailingConfigPreset,
+    double? hardStopPercent,
     int? maxTokensSimultaneous,
     double? maxLossPerDay,
     double? maxEarningPerDay,
@@ -317,6 +331,10 @@ class AutoInvestState {
       stopLossLevels: stopLossLevels ?? this.stopLossLevels,
       trailingStopEnabled: trailingStopEnabled ?? this.trailingStopEnabled,
       trailingStopPercent: trailingStopPercent ?? this.trailingStopPercent,
+      dynamicTrailingEnabled:
+          dynamicTrailingEnabled ?? this.dynamicTrailingEnabled,
+      trailingConfigPreset: trailingConfigPreset ?? this.trailingConfigPreset,
+      hardStopPercent: hardStopPercent ?? this.hardStopPercent,
       maxTokensSimultaneous:
           maxTokensSimultaneous ?? this.maxTokensSimultaneous,
       maxLossPerDay: maxLossPerDay ?? this.maxLossPerDay,
@@ -380,6 +398,9 @@ class AutoInvestState {
     'stopLossLevels': stopLossLevels.map((l) => l.toJson()).toList(),
     'trailingStopEnabled': trailingStopEnabled,
     'trailingStopPercent': trailingStopPercent,
+    'dynamicTrailingEnabled': dynamicTrailingEnabled,
+    'trailingConfigPreset': trailingConfigPreset.name,
+    'hardStopPercent': hardStopPercent,
     'maxTokensSimultaneous': maxTokensSimultaneous,
     'maxLossPerDay': maxLossPerDay,
     'maxEarningPerDay': maxEarningPerDay,
@@ -548,6 +569,15 @@ class AutoInvestState {
         'trailingStopPercent',
         initial.trailingStopPercent,
       ),
+      dynamicTrailingEnabled:
+          json['dynamicTrailingEnabled'] as bool? ??
+          initial.dynamicTrailingEnabled,
+      trailingConfigPreset: TrailingConfigPreset.values.firstWhere(
+        (e) =>
+            e.name == (json['trailingConfigPreset']?.toString() ?? 'balanced'),
+        orElse: () => TrailingConfigPreset.balanced,
+      ),
+      hardStopPercent: readDouble('hardStopPercent', initial.hardStopPercent),
       maxTokensSimultaneous:
           (json['maxTokensSimultaneous'] as num?)?.toInt() ??
           initial.maxTokensSimultaneous,
@@ -862,6 +892,18 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
 
   void updateTrailingStopPercent(double value) {
     _setState(state.copyWith(trailingStopPercent: value.clamp(1, 50)));
+  }
+
+  void updateDynamicTrailingEnabled(bool value) {
+    _setState(state.copyWith(dynamicTrailingEnabled: value));
+  }
+
+  void updateTrailingConfigPreset(TrailingConfigPreset preset) {
+    _setState(state.copyWith(trailingConfigPreset: preset));
+  }
+
+  void updateHardStopPercent(double value) {
+    _setState(state.copyWith(hardStopPercent: value.clamp(5, 50)));
   }
 
   void updateMaxTokensSimultaneous(int value) {
@@ -1765,6 +1807,10 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
     DateTime? alertTriggeredAt,
     bool updateAlert = false,
     double? maxPnlPercentReached,
+    double? currentTrailingStopPercent,
+    double? currentExitPriceSol,
+    double? currentPriorityFeeSol,
+    double? currentSlippagePercent,
   }) {
     final positions = state.positions;
     final index = positions.indexWhere(
@@ -1794,6 +1840,10 @@ class AutoInvestNotifier extends Notifier<AutoInvestState> {
       pnlPercent: pnlPercent,
       lastCheckedAt: checkedAt,
       maxPnlPercentReached: maxPnlPercentReached,
+      currentTrailingStopPercent: currentTrailingStopPercent,
+      currentExitPriceSol: currentExitPriceSol,
+      currentPriorityFeeSol: currentPriorityFeeSol,
+      currentSlippagePercent: currentSlippagePercent,
     );
     if (updateAlert) {
       next = next.copyWith(
