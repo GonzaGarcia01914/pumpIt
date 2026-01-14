@@ -1,116 +1,111 @@
-# Arquitectura de Conexiones - Pump It Baby Bot
+# Connection Architecture - Pump It Baby
 
-## 📋 Resumen
+## Summary
 
-El bot ahora usa una arquitectura de 3 capas para optimizar velocidad y eficiencia:
+The bot uses a three-layer connection stack to optimize speed and reliability:
 
-1. **⚡ WebSockets** - Para todo lo crítico en tiempo real
-2. **🔄 RPC HTTP JSON-RPC** - Para operaciones puntuales no críticas
-3. **🧠 Enhanced Solana APIs (Helius)** - Para analytics, reporting y dashboard
+1. WebSockets for real-time events and confirmations
+2. JSON-RPC HTTP for point-in-time reads and transaction submission
+3. Helius Enhanced APIs for analytics, reporting, and enriched history
 
 ---
 
-## ⚡ WebSockets
+## WebSockets
 
-**Uso:** Todo lo crítico para la latencia del bot
+Use case: Low-latency, real-time workflows
 
-### Implementado:
+Implemented:
 
-- ✅ **Confirmación de transacciones** (`signatureSubscribe`)
-  - Reemplaza polling lento vía RPC
-  - Confirmación inmediata cuando la tx es confirmada
-  - Fallback automático a RPC HTTP si WebSocket falla
+- Transaction confirmation (`signatureSubscribe`)
+  - Replaces slow polling
+  - Immediate confirmation on-chain
+  - Automatic fallback to RPC HTTP if WS fails
 
-- ✅ **Suscripciones a logs de programas** (`logsSubscribe`)
-  - Detecta eventos de pump.fun antes que polling HTTP
-  - Útil para detectar buys/sells/migraciones en tiempo real
+- Program log subscriptions (`logsSubscribe`)
+  - Detect pump.fun events faster than HTTP polling
+  - Useful for tracking buys/sells/migrations
 
-- ✅ **Suscripciones a cuentas** (`accountSubscribe`)
-  - Monitorea cambios en pools (precio, liquidez)
-  - Permite reaccionar rápido en take-profit/stop-loss
+- Account subscriptions (`accountSubscribe`)
+  - Monitor pool state (price, liquidity)
+  - Enables fast take-profit and stop-loss reactions
 
-### Ubicación:
+Location:
 - `lib/features/auto_invest/services/solana_websocket_service.dart`
 
-### Uso:
+Example:
 ```dart
-// Confirmación vía WebSocket (automático en waitForConfirmation)
-await wallet.waitForConfirmation(signature); // Usa WebSocket si disponible
+// Confirmation via WebSocket (automatic in waitForConfirmation)
+await wallet.waitForConfirmation(signature);
 
-// Suscripción a eventos pump.fun
+// Subscribe to pump.fun program logs
 final logsStream = websocketService.subscribeToProgramLogs(pumpFunProgramId);
 await for (final event in logsStream) {
-  // Reaccionar a eventos en tiempo real
+  // React to real-time events
 }
 ```
 
 ---
 
-## 🔄 RPC HTTP JSON-RPC
+## JSON-RPC HTTP
 
-**Uso:** Operaciones puntuales no críticas en tiempo
+Use case: Non-critical point reads and transaction submission
 
-### Implementado:
+Implemented:
 
-- ✅ **Envío de transacciones** (`sendTransaction`)
+- Submit transactions (`sendTransaction`)
   - `WalletExecutionService.signAndSendBase64()`
-  - Con skipPreflight habilitado para velocidad
+  - skipPreflight enabled for speed
 
-- ✅ **Lectura de estado** (no crítico)
-  - `getBalance()` - Para actualizar UI
-  - `getTokenAccountsByOwner()` - Si no usas Enhanced API
-  - `getLatestBlockhash()` - Antes de firmar transacciones
+- State reads (non-critical)
+  - `getBalance()` for UI refresh
+  - `getTokenAccountsByOwner()` for fallback paths
+  - `getLatestBlockhash()` before signing
 
-- ✅ **Lectura de transacciones**
-  - `getTransaction()` - Para leer resultados de swaps
-  - `readTokenAmountFromTransaction()` - Para calcular fills
+- Transaction reads
+  - `getTransaction()` for swap details
+  - `readTokenAmountFromTransaction()` for fills
 
-### Ubicación:
+Location:
 - `lib/features/auto_invest/services/wallet_execution_service_local.dart`
 
-### Uso:
+Example:
 ```dart
-// Obtener blockhash antes de firmar
 final blockhash = await wallet.getLatestBlockhash();
-
-// Leer balance (no crítico)
 final balance = await wallet.getWalletBalance(address);
 ```
 
 ---
 
-## 🧠 Enhanced Solana APIs (Helius)
+## Helius Enhanced APIs
 
-**Uso:** Historial, reporting, analytics y dashboard
+Use case: History, reporting, analytics, and dashboards
 
-### Implementado:
+Implemented:
 
-- ✅ **Historial de transacciones parseadas**
-  - `getParsedTransactions()` - Trades con metadata
-  - `getParsedTrades()` - Solo swaps con PnL calculado
-  - `getPumpFunActivity()` - Actividad específica de pump.fun
+- Parsed transaction history
+  - `getParsedTransactions()`
+  - `getParsedTrades()` with PnL
+  - `getPumpFunActivity()`
 
-- ✅ **Analytics y estadísticas**
-  - `getTokenVolumeStats()` - Volumen por token
-  - `getPnLReport()` - PnL total y por token
+- Analytics and stats
+  - `getTokenVolumeStats()`
+  - `getPnLReport()`
 
-### Ubicación:
+Location:
 - `lib/features/auto_invest/services/helius_enhanced_api_service.dart`
 
-### Configuración:
+Configuration:
 ```bash
---dart-define=HELIUS_API_KEY=tu_api_key
+--dart-define=HELIUS_API_KEY=your_api_key
 ```
 
-### Uso:
+Example:
 ```dart
-// Obtener historial de trades
 final trades = await heliusService.getParsedTrades(
   walletAddress: walletAddress,
   limit: 100,
 );
 
-// Obtener reporte de PnL
 final pnlReport = await heliusService.getPnLReport(
   walletAddress: walletAddress,
 );
@@ -118,64 +113,61 @@ final pnlReport = await heliusService.getPnLReport(
 
 ---
 
-## 🔄 Flujo de Confirmación Optimizado
+## Optimized Confirmation Flow
 
-### Antes (solo RPC HTTP):
-```
-1. Enviar transacción → RPC HTTP
-2. Polling cada X ms → RPC HTTP (lento)
-3. Confirmación después de varios intentos
-```
+Before (RPC only):
 
-### Ahora (WebSocket + Fallback):
-```
-1. Enviar transacción → RPC HTTP
-2. Suscripción WebSocket → Confirmación inmediata ⚡
-3. Si WebSocket falla → Fallback a RPC HTTP polling
-```
+1. Send transaction via HTTP
+2. Poll every X ms
+3. Confirm after multiple retries
 
-**Resultado:** Confirmación en <2s en lugar de 5-15s
+Now (WebSocket + fallback):
+
+1. Send transaction via HTTP
+2. WebSocket subscription
+3. If WS fails, fallback to HTTP polling
+
+Result: Typical confirmations in under 2s instead of 5-15s.
 
 ---
 
-## 📊 Separación de Responsabilidades
+## Responsibilities Matrix
 
-| Operación | Método | Tecnología |
-|-----------|--------|------------|
-| Enviar transacción | `signAndSendBase64()` | RPC HTTP |
-| Confirmar transacción | `waitForConfirmation()` | WebSocket → RPC HTTP fallback |
-| Leer balance | `getWalletBalance()` | RPC HTTP |
-| Obtener blockhash | `getLatestBlockhash()` | RPC HTTP |
-| Historial de trades | `getParsedTrades()` | Enhanced API (Helius) |
-| Analytics/PnL | `getPnLReport()` | Enhanced API (Helius) |
-| Eventos en tiempo real | `subscribeToProgramLogs()` | WebSocket |
-| Monitoreo de pools | `subscribeToAccount()` | WebSocket |
-
----
-
-## 🚀 Próximos Pasos
-
-- [ ] Integrar Enhanced API en UI para mostrar historial
-- [ ] Implementar suscripciones WebSocket para eventos pump.fun en el executor
-- [ ] Agregar monitoreo de pools vía WebSocket para take-profit/stop-loss
-- [ ] Dashboard con analytics usando Enhanced API
+| Operation | Method | Tech |
+| --- | --- | --- |
+| Submit transaction | `signAndSendBase64()` | RPC HTTP |
+| Confirm transaction | `waitForConfirmation()` | WebSocket with HTTP fallback |
+| Read balance | `getWalletBalance()` | RPC HTTP |
+| Get blockhash | `getLatestBlockhash()` | RPC HTTP |
+| Trade history | `getParsedTrades()` | Helius Enhanced API |
+| Analytics/PnL | `getPnLReport()` | Helius Enhanced API |
+| Program events | `subscribeToProgramLogs()` | WebSocket |
+| Pool monitoring | `subscribeToAccount()` | WebSocket |
 
 ---
 
-## ⚙️ Configuración
+## Next Steps
 
-### Variables de entorno requeridas:
+- Expose Enhanced API insights in the UI
+- Add program log subscriptions to the executor
+- Use WS pool monitoring for take-profit and stop-loss
+- Expand analytics dashboards
+
+---
+
+## Configuration
 
 ```bash
-# RPC (obligatorio)
---dart-define=RPC_URL=https://mainnet.helius-rpc.com/?api-key=TU_KEY
+# RPC (required)
+--dart-define=RPC_URL=https://mainnet.helius-rpc.com/?api-key=YOUR_KEY
 
-# Enhanced API (opcional, para analytics)
---dart-define=HELIUS_API_KEY=tu_api_key
+# Enhanced API (optional, analytics)
+--dart-define=HELIUS_API_KEY=your_api_key
 ```
 
-### WebSocket:
-- Se crea automáticamente desde `RPC_URL`
-- Convierte `https://` → `wss://` y `http://` → `ws://`
-- Fallback automático a RPC HTTP si no está disponible
+WebSockets are derived from the RPC URL:
 
+- `https://` -> `wss://`
+- `http://` -> `ws://`
+
+If WebSocket is unavailable, RPC HTTP is used as fallback.
